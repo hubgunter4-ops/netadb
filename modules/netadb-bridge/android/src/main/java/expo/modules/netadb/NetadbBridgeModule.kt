@@ -197,6 +197,7 @@ class NetadbBridgeModule : Module() {
       }
       val input = process.outputStream.bufferedWriter(Charsets.UTF_8)
       synchronized(shellLock) { shellProcess = process; shellInput = input; shellSerial = serial }
+      sendShellState(serial, "ready")
       shellThread = thread(name = "NetADB-shell", isDaemon = true) {
         try {
           process.inputStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
@@ -215,7 +216,6 @@ class NetadbBridgeModule : Module() {
           }
         }
       }
-      sendShellState(serial, "ready")
       mapOf("ready" to true, "serial" to serial)
     }
 
