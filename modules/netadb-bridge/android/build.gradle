@@ -10,6 +10,8 @@ android {
   namespace 'expo.modules.netadb'
   defaultConfig {
     minSdkVersion 24
+    versionCode 1
+    versionName '1.0.0'
   }
   packagingOptions {
     jniLibs {
