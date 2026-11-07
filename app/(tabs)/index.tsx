@@ -59,6 +59,7 @@ export default function TerminalScreen() {
   const [commandsVisible, setCommandsVisible] = useState(false);
   const [pairAddress, setPairAddress] = useState("");
   const [pairingCode, setPairingCode] = useState("");
+  const [automaticPairingCode, setAutomaticPairingCode] = useState("");
   const [connectAddress, setConnectAddress] = useState("");
   const [availableDevices, setAvailableDevices] = useState<string[]>([]);
   const [serial, setSerial] = useState("");
@@ -197,6 +198,51 @@ export default function TerminalScreen() {
       appendLine(`! Error de pairing: ${String(error)}`);
     } finally {
       setPairingCode("");
+      setBusy(false);
+    }
+  };
+
+  const pairAutomatically = async () => {
+    if (!NetadbBridge) return;
+    if (!/^\d{6}$/.test(automaticPairingCode)) {
+      setNotice("Introduce únicamente el código temporal de 6 dígitos.");
+      return;
+    }
+    setBusy(true);
+    setSessionState("connecting");
+    setNotice("Buscando Wireless debugging local y enviando el código…");
+    appendLine("$ adb pair <servicio local descubierto>");
+    try {
+      const paired = await NetadbBridge.pairAutomatically(automaticPairingCode);
+      if (paired.output) paired.output.trimEnd().split(/\r?\n/).forEach(appendLine);
+      setAutomaticPairingCode("");
+      if (!paired.success) {
+        setSessionState("error");
+        setNotice(`No se completó el pairing. ${paired.output || "Revisa que la pantalla de pairing siga abierta."}`);
+        return;
+      }
+      setNotice("Pairing completado. Descubriendo el endpoint ADB…");
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const connected = await NetadbBridge.connectAutomatically();
+      const devices = connected.connected ? connected.devices ?? [] : [];
+      setAvailableDevices(devices);
+      if (connected.output) connected.output.trimEnd().split(/\r?\n/).forEach(appendLine);
+      if (devices.length === 1) {
+        closeDialog();
+        await openShell(devices[0]);
+      } else if (devices.length > 1) {
+        closeDialog();
+        setSessionState("choose-device");
+        setNotice(`Conexión lista. Selecciona el serial al que abrir el shell (${devices.length} dispositivos).`);
+      } else {
+        setSessionState("error");
+        setNotice(`Pairing correcto, pero no se encontró el endpoint de conexión. ${connected.output || "Usa el modo manual."}`);
+      }
+    } catch (error) {
+      setSessionState("error");
+      setNotice(`No se pudo descubrir el teléfono automáticamente: ${String(error)}`);
+      appendLine(`! Descubrimiento ADB: ${String(error)}`);
+    } finally {
       setBusy(false);
     }
   };
@@ -455,8 +501,28 @@ export default function TerminalScreen() {
                   </Pressable>
                 </View>
                 <Text style={styles.dialogCopy}>
-                  En Opciones de desarrollador abre Depuración inalámbrica. Android muestra un puerto/código de pairing y otro puerto de conexión.
+                  Abre “Pair using pairing code” en Depuración inalámbrica. El modo automático descubre el servicio local y solo solicita el código de seis dígitos.
                 </Text>
+
+                <Text style={styles.fieldLabel}>MODO AUTOMÁTICO · SOLO CÓDIGO</Text>
+                <TextInput
+                  value={automaticPairingCode}
+                  onChangeText={(value) => setAutomaticPairingCode(value.replace(/\D/g, "").slice(0, 6))}
+                  placeholder="000000"
+                  placeholderTextColor="#69796e"
+                  style={styles.field}
+                  keyboardType="number-pad"
+                  maxLength={6}
+                  secureTextEntry
+                  returnKeyType="done"
+                  accessibilityLabel="Código temporal para descubrimiento automático"
+                />
+                <Pressable accessibilityRole="button" disabled={!bridgeReady || busy} onPress={() => void pairAutomatically()} style={[styles.primaryButton, (!bridgeReady || busy) && styles.disabled]}>
+                  <Text style={styles.primaryButtonText}>{busy ? "DESCUBRIENDO…" : "EMPAREJAR Y CONECTAR AUTOMÁTICAMENTE"}</Text>
+                </Pressable>
+                <Text style={styles.webWarning}>Si mDNS no está disponible en la red, usa el modo manual para introducir host y puerto.</Text>
+                <View style={styles.separator} />
+                <Text style={styles.fieldLabel}>MODO MANUAL · HOST Y PUERTO</Text>
 
                 <Text style={styles.fieldLabel}>PAIRING · HOST:PUERTO</Text>
                 <TextInput

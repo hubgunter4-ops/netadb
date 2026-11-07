@@ -4,6 +4,8 @@ import android.content.ComponentName
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
+import android.net.nsd.NsdManager
+import android.net.nsd.NsdServiceInfo
 import android.os.IBinder
 import androidx.core.content.FileProvider
 import expo.modules.kotlin.modules.Module
@@ -276,6 +278,20 @@ class NetadbBridgeModule : Module() {
       )
     }
 
+    AsyncFunction("pairAutomatically") { pairingCode: String ->
+      require(pairingCode.matches(Regex("[0-9]{6}"))) { "El código temporal debe tener 6 dígitos" }
+      val endpoints = discoverAdbEndpoints("_adb-tls-pairing._tcp.")
+      if (endpoints.isEmpty()) throw IllegalStateException("No se encontró el servicio de pairing. Mantén abierta la pantalla Pair using pairing code y verifica que Wireless debugging esté activo.")
+      var last: Map<String, Any>? = null
+      for (endpoint in endpoints) {
+        val result = pairAtEndpoint(endpoint, pairingCode) + mapOf("address" to endpoint)
+        last = result
+        val output = result["output"] as? String ?: ""
+        if (result["success"] == true || output.contains("authenticate", ignoreCase = true) || output.contains("invalid", ignoreCase = true) || output.contains("code", ignoreCase = true)) break
+      }
+      last!!
+    }
+
     AsyncFunction("connect") { address: String ->
       require(isValidAddress(address)) { "La dirección de conexión debe ser host:puerto" }
       val adb = adbPath()
@@ -295,6 +311,18 @@ class NetadbBridgeModule : Module() {
         "devices" to if (targetReady) devices else emptyList<String>(),
         "output" to listOf(start.output, connection.output, devicesResult.output).filter { it.isNotBlank() }.joinToString("\n")
       )
+    }
+
+    AsyncFunction("connectAutomatically") {
+      val endpoints = discoverAdbEndpoints("_adb-tls-connect._tcp.")
+      if (endpoints.isEmpty()) throw IllegalStateException("No se encontró el servicio ADB después del pairing. Activa Wireless debugging y usa la conexión manual si mDNS está bloqueado.")
+      var last: Map<String, Any>? = null
+      for (endpoint in endpoints) {
+        val result = connectAtEndpoint(endpoint) + mapOf("address" to endpoint)
+        last = result
+        if (result["connected"] == true) break
+      }
+      last!!
     }
 
     AsyncFunction("runShell") { serial: String, command: String ->
@@ -416,6 +444,83 @@ class NetadbBridgeModule : Module() {
   }
 
   private data class CommandResult(val output: String, val exitCode: Int)
+
+  private fun pairAtEndpoint(address: String, pairingCode: String): Map<String, Any> {
+    val adb = adbPath()
+    val process = adbProcessBuilder(adb, listOf("pair", address)).start()
+    val output = StringBuilder()
+    val outputLock = Any()
+    val outputThread = thread(name = "NetADB-pair-output", isDaemon = true) {
+      runCatching {
+        process.inputStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
+          lines.forEach { line -> synchronized(outputLock) { if (output.length < 2_000_000) output.append(line).append('\n') } }
+        }
+      }
+    }
+    val finished = try {
+      process.outputStream.bufferedWriter(Charsets.UTF_8).use { writer ->
+        writer.write(pairingCode)
+        writer.newLine()
+        writer.flush()
+      }
+      val completed = process.waitFor(25, TimeUnit.SECONDS)
+      if (!completed) process.destroyForcibly()
+      completed
+    } finally {
+      if (process.isAlive) process.destroyForcibly()
+      outputThread.join(1500)
+    }
+    val text = synchronized(outputLock) { output.toString() }
+    return mapOf("success" to (finished && process.exitValue() == 0), "output" to text.ifBlank { if (finished) "ADB pair terminó sin salida" else "Tiempo de emparejamiento agotado" })
+  }
+
+  private fun connectAtEndpoint(address: String): Map<String, Any> {
+    val adb = adbPath()
+    val start = runAdb(adb, listOf("start-server"), 20)
+    val connection = runAdb(adb, listOf("connect", address), 20)
+    val devicesResult = runAdb(adb, listOf("devices", "-l"), 15)
+    val devices = devicesResult.output.lineSequence().map { it.trim().split(Regex("\\s+")) }
+      .filter { it.size >= 2 && it[1] == "device" }.map { it[0] }.toList()
+    val targetReady = address in devices
+    return mapOf("connected" to targetReady, "targetSerial" to if (targetReady) address else "", "devices" to if (targetReady) devices else emptyList<String>(), "output" to listOf(start.output, connection.output, devicesResult.output).filter { it.isNotBlank() }.joinToString("\n"))
+  }
+
+  private fun discoverAdbEndpoints(serviceType: String): List<String> {
+    val context = appContext.reactContext?.applicationContext ?: throw IllegalStateException("Contexto Android no disponible")
+    val nsd = context.getSystemService(NsdManager::class.java) ?: return null
+    val localAddresses = java.net.NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
+      .flatMap { it.inetAddresses.toList() }.mapNotNull { it.hostAddress?.substringBefore('%') }.toSet()
+    val result = java.util.concurrent.atomic.AtomicReference<List<String>?>(null)
+    val latch = CountDownLatch(1)
+    val discovery = object : NsdManager.DiscoveryListener {
+      override fun onDiscoveryStarted(regType: String) = Unit
+      override fun onServiceFound(info: NsdServiceInfo) {
+        if (result.get() != null || !info.serviceType.replace(".", "").endsWith(serviceType.replace(".", ""))) return
+        runCatching {
+          nsd.resolveService(info, object : NsdManager.ResolveListener {
+            override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) = Unit
+            override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
+              val host = serviceInfo.host?.hostAddress?.substringBefore('%') ?: return
+              if (host !in localAddresses && host != "127.0.0.1") return
+              result.compareAndSet(null, listOf("127.0.0.1:${serviceInfo.port}", "$host:${serviceInfo.port}"))
+              latch.countDown()
+            }
+          })
+        }
+      }
+      override fun onServiceLost(info: NsdServiceInfo) = Unit
+      override fun onDiscoveryStopped(serviceType: String) = Unit
+      override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) = latch.countDown()
+      override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) = latch.countDown()
+    }
+    return try {
+      nsd.discoverServices(serviceType, NsdManager.PROTOCOL_DNS_SD, discovery)
+      latch.await(7, TimeUnit.SECONDS)
+      result.get().orEmpty()
+    } finally {
+      runCatching { nsd.stopServiceDiscovery(discovery) }
+    }
+  }
 
   private fun runAdb(adb: String, args: List<String>, timeoutSeconds: Long): CommandResult {
     val process = adbProcessBuilder(adb, args).start()

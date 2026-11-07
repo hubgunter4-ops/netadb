@@ -8,7 +8,7 @@ La licencia de LADB requiere conservar el aviso de copyright, sus condiciones y 
 
 ## Ejecutable ADB incluido
 
-Los ejecutables nativos `libadb.so` de ARM64 y ARMv7 provienen del árbol `app/src/main/jniLibs/` del repositorio upstream indicado. Su archivo `LICENSE` declara Apache License 2.0; la copia completa está en `ADB-LIBRARY-LICENSE.txt` y dentro de los recursos del APK.
+Los ejecutables nativos `libadb.so` de ARM64, ARMv7, x86 y x86_64 provienen del árbol `app/src/main/jniLibs/` del repositorio upstream indicado. Se incluyen en `android/src/main/jniLibs/` para que el APK no dependa de un ADB instalado externamente. Su archivo `LICENSE` declara Apache License 2.0; la copia completa está en `ADB-LIBRARY-LICENSE.txt` y dentro de los recursos del APK.
 
 ## Shizuku API
 

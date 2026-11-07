@@ -1,7 +1,7 @@
 import { Platform } from "react-native";
 import { requireOptionalNativeModule } from "expo-modules-core";
 
-export type BridgeResult = { output: string; exitCode?: number; success?: boolean; connected?: boolean; targetSerial?: string; devices?: string[]; filePath?: string };
+export type BridgeResult = { output: string; exitCode?: number; success?: boolean; connected?: boolean; targetSerial?: string; devices?: string[]; filePath?: string; address?: string };
 export type BridgeStatus = { available: boolean; androidVersion: string; apiLevel: number };
 export type ShizukuStatus = { serviceRunning: boolean; permissionGranted: boolean; uid: number; apiVersion: number };
 export type ShizukuPackage = { packageName: string; kind: "system" | "user"; disabled: boolean; protected: boolean };
@@ -17,7 +17,9 @@ export type NetadbNativeModule = {
   updateDiagnosticsSession(serial: string, status: string, lines: number): Promise<boolean>;
   stopDiagnosticsSession(): Promise<boolean>;
   pair(port: string, pairingCode: string): Promise<BridgeResult>;
+  pairAutomatically(pairingCode: string): Promise<BridgeResult>;
   connect(port: string): Promise<BridgeResult>;
+  connectAutomatically(): Promise<BridgeResult>;
   runShell(serial: string, command: string): Promise<BridgeResult>;
   openShell(serial: string): Promise<{ ready: boolean; serial: string; output?: string }>;
   sendShellCommand(command: string): Promise<boolean>;
