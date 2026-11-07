@@ -2,6 +2,9 @@
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
   <uses-permission android:name="android.permission.WAKE_LOCK" />
+  <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+  <uses-permission android:name="android.permission.INTERNET" />
+  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
   <application>
     <provider
       android:name="rikka.shizuku.ShizukuProvider"
@@ -27,6 +30,19 @@
       <property
         android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
         android:value="Captura ADB inalámbrica solicitada por la persona con estado de registro visible." />
+    </service>
+    <service
+      android:name="expo.modules.netadb.NetadbVpnService"
+      android:permission="android.permission.BIND_VPN_SERVICE"
+      android:exported="true"
+      android:stopWithTask="false"
+      android:foregroundServiceType="specialUse">
+      <property
+        android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+        android:value="VPN local consentida por la persona para observar metadatos de red de una aplicación seleccionada." />
+      <intent-filter>
+        <action android:name="android.net.VpnService" />
+      </intent-filter>
     </service>
   </application>
 </manifest>

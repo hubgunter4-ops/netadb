@@ -134,13 +134,63 @@ class NetadbBridgeModule : Module() {
       true
     }
 
+    AsyncFunction("getVpnCaptureStatus") {
+      val context = appContext.reactContext?.applicationContext
+        ?: throw IllegalStateException("Contexto Android no disponible")
+      NetadbVpnService.getSnapshot(context)
+    }
+
+    AsyncFunction("listVpnTargets") {
+      val context = appContext.reactContext?.applicationContext
+        ?: throw IllegalStateException("Contexto Android no disponible")
+      NetadbVpnService.listTargets(context)
+    }
+
+    AsyncFunction("requestVpnConsent") {
+      val context = appContext.reactContext?.applicationContext
+        ?: throw IllegalStateException("Contexto Android no disponible")
+      check(!NetadbVpnService.hasOtherVpn(context)) {
+        "Hay otra VPN activa. Detén esa VPN desde Android antes de autorizar NetADB."
+      }
+      val request = android.net.VpnService.prepare(context)
+      if (request == null) {
+        mapOf("permissionGranted" to true, "promptLaunched" to false)
+      } else {
+        val activity = appContext.currentActivity
+          ?: throw IllegalStateException("Vuelve a NetADB en primer plano para mostrar el consentimiento VPN de Android.")
+        @Suppress("DEPRECATION")
+        activity.runOnUiThread { activity.startActivityForResult(request, 7316) }
+        mapOf("permissionGranted" to false, "promptLaunched" to true)
+      }
+    }
+
+    AsyncFunction("startVpnCapture") { targetPackage: String ->
+      val context = appContext.reactContext?.applicationContext
+        ?: throw IllegalStateException("Contexto Android no disponible")
+      require(targetPackage.matches(Regex("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+"))) { "Nombre de paquete inválido" }
+      check(!NetadbVpnService.hasOtherVpn(context)) {
+        "Hay otra VPN activa. Detén esa VPN desde Android antes de iniciar NetADB."
+      }
+      check(android.net.VpnService.prepare(context) == null) { "Primero autoriza la VPN local en el diálogo de Android." }
+      NetadbVpnService.start(context, targetPackage)
+      true
+    }
+
+    AsyncFunction("stopVpnCapture") {
+      val context = appContext.reactContext?.applicationContext
+        ?: throw IllegalStateException("Contexto Android no disponible")
+      NetadbVpnService.stop(context)
+      true
+    }
+
     AsyncFunction("getLicenses") {
       val context = appContext.reactContext?.applicationContext
         ?: throw IllegalStateException("Contexto Android no disponible")
       val ladb = context.resources.openRawResource(R.raw.ladb_license).bufferedReader().use { it.readText() }
       val adb = context.resources.openRawResource(R.raw.adb_library_license).bufferedReader().use { it.readText() }
       val shizuku = context.resources.openRawResource(R.raw.shizuku_api_license).bufferedReader().use { it.readText() }
-      mapOf("ladb" to ladb, "adb" to adb, "shizuku" to shizuku)
+      val vpn = context.resources.openRawResource(R.raw.vpn_engine_licenses).bufferedReader().use { it.readText() }
+      mapOf("ladb" to ladb, "adb" to adb, "shizuku" to shizuku, "vpn" to vpn)
     }
 
     AsyncFunction("writeExport") { filename: String, contents: String ->

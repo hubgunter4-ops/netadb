@@ -30,7 +30,7 @@
 
 ## 6. Identidad, avisos y APK
 - [x] La app aplica el estilo Terminal Fósforo aprobado y registra un icono de launcher cuadrado y adaptativo coherente con NetADB.
-- [x] Los avisos legales de LADB y de las bibliotecas ADB reutilizadas se incluyen dentro de la app y acompañan las redistribuciones.
+- [x] Los textos completos de LADB y ADB, Shizuku MIT y los componentes Hev/túnel con licencias MIT, BSD y Apache aplicables están en el repositorio y se consultan en la pantalla Licencias del APK.
 - [ ] Preparar una build Android release firmada por el flujo administrado; entregar el APK instalable solo cuando la build real termine correctamente, destinado a instalación directa fuera de Google Play.
 
 ## 7. Interfaz de terminal inspirada en LADB
@@ -60,9 +60,9 @@
 - [ ] Desde NetADB, la persona puede elegir una aplicación instalada e iniciar una captura local; antes de establecer el túnel, NetADB llama a `VpnService.prepare()` y Android muestra su consentimiento del sistema. Si el permiso se deniega o cambia la VPN preparada, la captura no se inicia hasta volver a autorizarla.
 - [ ] El `VpnService.Builder` enruta únicamente el paquete seleccionado mediante `addAllowedApplication`; NetADB excluye su propio tráfico del filtro para no crear un bucle. No requiere root ni Shizuku. Si ya hay otra VPN activa, NetADB informa que Android solo permite una VPN activa por usuario/perfil y no la reemplaza silenciosamente.
 - [ ] Mientras está activa, la captura conserva conectividad TCP y UDP mediante un motor de reenvío TUN/`tun2socks` y relay local, con relay ligado a loopback. El foreground service muestra una notificación persistente con estado y acción de detener. Detener, revocar permiso o fallar cierra TUN/relays y elimina la ruta VPN.
-- [ ] La pantalla muestra conexiones/metadatos disponibles del paquete seleccionado (protocolo, IP/puerto local/remoto, hora y bytes; DNS/SNI solo cuando puedan observarse), sin guardar payload, exportar tráfico por defecto ni descifrar TLS.
+- [ ] La pantalla muestra metadatos disponibles del paquete seleccionado: protocolo, destino y puerto remoto cuando el motor los expone, hora y cantidad de eventos; bytes UDP observados por destino y contadores totales de TUN cuando estén disponibles. DNS/SNI solo aparecen cuando los metadatos efectivamente los expongan. No se promete un endpoint local ni bytes TCP por conexión, no se guarda payload ni se exporta tráfico por defecto, y no se descifra TLS.
 - [ ] La interfaz aclara que la VPN sin root observa principalmente conexiones salientes iniciadas por la aplicación; no prueba que una conexión entrante no solicitada haya llegado a una app, y el cifrado TLS no se descifra.
-- [ ] Los componentes nativos redistribuidos incluyen los avisos MIT completos de sus proyectos y las licencias de dependencias transitivas exigidas. La implementación seleccionada está pendiente; no se declara disponible hasta compilarse y verificarse en Android real.
+- [ ] Los componentes nativos redistribuidos incluyen los textos completos de las licencias MIT/BSD/Apache aplicables y los avisos de dependencias transitivas, disponibles en la app y en el repositorio. La función no se declara disponible hasta compilarse dentro de un APK real y verificarse en Android.
 
 ## 11. Inspección profunda de app en modo de solo lectura
 - [ ] Desde la pestaña Apps, la persona puede abrir una ficha de un paquete y consultar nombre/paquete, versión, UID, target SDK y fechas disponibles, sin modificar la app inspeccionada.

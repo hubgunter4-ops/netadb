@@ -8,6 +8,9 @@ export type ShizukuPackage = { packageName: string; kind: "system" | "user"; dis
 export type ShizukuInspection = { packageName: string; uid: number | null; versionCode: number | null; versionName: string | null; targetSdk: number | null; firstInstallTime: string | null; lastUpdateTime: string | null; packageDump: string; appOps: string; appOpsExitCode: number; networkStats: string; networkStatsAvailable: boolean };
 export type ShizukuAction = "force-stop" | "disable-user" | "enable";
 export type ShellState = { serial: string; state: "ready" | "closed" | "error"; message?: string; exitCode?: number };
+export type VpnAppTarget = { packageName: string; label: string; systemApp: boolean };
+export type VpnConnection = { protocol: "tcp" | "udp"; endpoint: string; firstSeen: number; lastSeen: number; events: number; bytes: number; openObserved: boolean };
+export type VpnCaptureStatus = { permissionGranted: boolean; otherVpnActive: boolean; running: boolean; state: "idle" | "starting" | "running" | "error"; packageName: string; message: string; txPackets: number; txBytes: number; rxPackets: number; rxBytes: number; connections: VpnConnection[] };
 export type NetadbNativeModule = {
   isAvailable(): Promise<BridgeStatus>;
   startDiagnosticsSession(serial: string, status: string): Promise<boolean>;
@@ -25,7 +28,12 @@ export type NetadbNativeModule = {
   writeExport(filename: string, contents: string): Promise<string>;
   shareFile(path: string, mimeType: "application/json" | "application/zip" | "text/plain"): Promise<boolean>;
   deleteDiagnosticFiles(): Promise<{ filesDeleted: number; bytesDeleted: number }>;
-  getLicenses(): Promise<{ ladb: string; adb: string; shizuku: string }>;
+  getLicenses(): Promise<{ ladb: string; adb: string; shizuku: string; vpn: string }>;
+  getVpnCaptureStatus(): Promise<VpnCaptureStatus>;
+  listVpnTargets(): Promise<VpnAppTarget[]>;
+  requestVpnConsent(): Promise<{ permissionGranted: boolean; promptLaunched: boolean }>;
+  startVpnCapture(packageName: string): Promise<boolean>;
+  stopVpnCapture(): Promise<boolean>;
   getShizukuStatus(): Promise<ShizukuStatus>;
   requestShizukuPermission(): Promise<boolean>;
   listShizukuPackages(includeUserApps: boolean): Promise<ShizukuPackage[]>;

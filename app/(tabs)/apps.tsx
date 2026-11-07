@@ -2,11 +2,21 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, AppState, Linking, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { ScreenContainer } from "@/components/screen-container";
 import { NetadbBridge } from "@/modules/netadb-bridge";
-import type { ShizukuAction, ShizukuInspection, ShizukuPackage, ShizukuStatus } from "@/modules/netadb-bridge";
+import type { ShizukuAction, ShizukuInspection, ShizukuPackage, ShizukuStatus, VpnAppTarget, VpnCaptureStatus } from "@/modules/netadb-bridge";
 
 const C = { bg: "#111814", panel: "#18221c", panel2: "#1d2a22", border: "#2c4130", text: "#e7f3e7", muted: "#90a394", green: "#7cff6b", amber: "#ffbe55", red: "#ff666d", cyan: "#67dce5" };
 const SHIZUKU_SETUP = "https://shizuku.rikka.app/guide/setup/";
 type Message = { tone: "good" | "warn" | "bad"; text: string };
+
+function formatBytes(value: number): string {
+  const bytes = Math.max(0, Number.isFinite(value) ? value : 0);
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KiB", "MiB", "GiB"];
+  let amount = bytes / 1024;
+  let unit = 0;
+  while (amount >= 1024 && unit < units.length - 1) { amount /= 1024; unit++; }
+  return `${amount.toFixed(1)} ${units[unit]}`;
+}
 
 function Button({ label, onPress, disabled, secondary = false, danger = false }: { label: string; onPress: () => void; disabled?: boolean; secondary?: boolean; danger?: boolean }) {
   return <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.button, secondary && styles.secondary, danger && styles.danger, disabled && styles.disabled, pressed && !disabled && { opacity: 0.78 }]}><Text style={[styles.buttonText, secondary && styles.secondaryText, danger && { color: C.red }]}>{label}</Text></Pressable>;
@@ -29,6 +39,12 @@ export default function AppsScreen() {
   const [selected, setSelected] = useState("");
   const [inspection, setInspection] = useState<ShizukuInspection | null>(null);
   const [inspectionBusy, setInspectionBusy] = useState(false);
+  const [vpnStatus, setVpnStatus] = useState<VpnCaptureStatus | null>(null);
+  const [vpnTargets, setVpnTargets] = useState<VpnAppTarget[]>([]);
+  const [vpnTargetPackage, setVpnTargetPackage] = useState("");
+  const [vpnQuery, setVpnQuery] = useState("");
+  const [vpnLoading, setVpnLoading] = useState(false);
+  const [vpnBusy, setVpnBusy] = useState(false);
   const [message, setMessage] = useState<Message | null>(null);
 
   const refreshStatus = useCallback(async () => {
@@ -42,11 +58,31 @@ export default function AppsScreen() {
     finally { setStatusBusy(false); }
   }, []);
 
+  const refreshVpnStatus = useCallback(async () => {
+    if (!NetadbBridge) { setVpnStatus(null); return; }
+    try {
+      const next = await NetadbBridge.getVpnCaptureStatus();
+      setVpnStatus(next);
+      if (next.packageName) setVpnTargetPackage(next.packageName);
+    } catch (error) {
+      setMessage({ tone: "bad", text: `No se pudo consultar la captura VPN: ${String(error)}` });
+    }
+  }, []);
+
   useEffect(() => {
     void refreshStatus();
-    const subscription = AppState.addEventListener("change", (state) => { if (state === "active") void refreshStatus(); });
+    void refreshVpnStatus();
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") { void refreshStatus(); void refreshVpnStatus(); }
+    });
     return () => subscription.remove();
-  }, [refreshStatus]);
+  }, [refreshStatus, refreshVpnStatus]);
+
+  useEffect(() => {
+    if (!vpnStatus?.running) return;
+    const timer = setInterval(() => void refreshVpnStatus(), 1000);
+    return () => clearInterval(timer);
+  }, [vpnStatus?.running, refreshVpnStatus]);
 
   const canUseShizuku = status?.serviceRunning === true && status.uid === 2000 && status.permissionGranted === true;
   const loadPackages = useCallback(async () => {
@@ -110,6 +146,62 @@ export default function AppsScreen() {
     return packages.filter((item) => !value || item.packageName.toLowerCase().includes(value));
   }, [packages, query]);
 
+  const filteredVpnTargets = useMemo(() => {
+    const value = vpnQuery.trim().toLowerCase();
+    return vpnTargets.filter((item) => !value || item.packageName.toLowerCase().includes(value) || item.label.toLowerCase().includes(value));
+  }, [vpnTargets, vpnQuery]);
+
+  const loadVpnTargets = async () => {
+    if (!NetadbBridge) { setMessage({ tone: "warn", text: "La captura VPN solo está disponible en el APK Android." }); return; }
+    setVpnLoading(true);
+    try {
+      const result = await NetadbBridge.listVpnTargets();
+      setVpnTargets(result);
+      setMessage({ tone: "good", text: `Se cargaron ${result.length} aplicaciones instaladas para seleccionar el ámbito de la VPN.` });
+    } catch (error) { setMessage({ tone: "bad", text: `No se pudo cargar la lista de apps VPN: ${String(error)}` }); }
+    finally { setVpnLoading(false); }
+  };
+
+  const requestVpnAccess = async () => {
+    if (!NetadbBridge) return;
+    try {
+      const result = await NetadbBridge.requestVpnConsent();
+      setMessage(result.permissionGranted
+        ? { tone: "good", text: "Android ya autorizó la VPN local de NetADB." }
+        : { tone: "warn", text: "Completa el consentimiento VPN de Android. Al volver a NetADB, comprueba el estado y pulsa INICIAR CAPTURA." });
+      await refreshVpnStatus();
+    } catch (error) { setMessage({ tone: "bad", text: `No se pudo solicitar el permiso VPN: ${String(error)}` }); }
+  };
+
+  const startLocalVpn = () => {
+    const bridge = NetadbBridge;
+    const target = vpnTargets.find((item) => item.packageName === vpnTargetPackage);
+    if (!bridge || !target || !vpnStatus?.permissionGranted || vpnBusy || vpnStatus.otherVpnActive) return;
+    Alert.alert("Iniciar VPN local", `NetADB enrutará por su túnel solo el tráfico de ${target.label} (${target.packageName}). Android mostrará una notificación persistente. Se guardan metadatos de destino, no payload, y no se descifra TLS.`, [
+      { text: "Cancelar", style: "cancel" },
+      { text: "INICIAR", onPress: () => void (async () => {
+        setVpnBusy(true);
+        try {
+          await bridge.startVpnCapture(target.packageName);
+          setMessage({ tone: "warn", text: "Solicitud enviada. Espera a que el servicio VPN y el relay local indiquen ACTIVA." });
+          await refreshVpnStatus();
+        } catch (error) { setMessage({ tone: "bad", text: `No se pudo iniciar la VPN local: ${String(error)}` }); }
+        finally { setVpnBusy(false); }
+      })() },
+    ]);
+  };
+
+  const stopLocalVpn = async () => {
+    if (!NetadbBridge || vpnBusy) return;
+    setVpnBusy(true);
+    try {
+      await NetadbBridge.stopVpnCapture();
+      setMessage({ tone: "good", text: "Se solicitó detener la VPN. Android restaurará el enrutamiento normal al cerrarse el TUN." });
+      await refreshVpnStatus();
+    } catch (error) { setMessage({ tone: "bad", text: `No se pudo detener la VPN: ${String(error)}` }); }
+    finally { setVpnBusy(false); }
+  };
+
   const statusTitle = !status?.serviceRunning ? "Shizuku no está iniciado" : status.uid !== 2000 ? "UID no compatible con modo sin root" : status.permissionGranted ? "Listo · Shizuku ADB" : "Falta autorizar NetADB";
   const statusBody = !status?.serviceRunning
     ? "Inicia Shizuku en modo ADB/shell. La lista y la ficha requieren que su servicio esté activo."
@@ -140,6 +232,50 @@ export default function AppsScreen() {
       </View>
 
       <View style={styles.notice}><Text style={styles.noticeIcon}>i</Text><Text style={styles.noticeText}>Modo sin root: Shizuku debe estar iniciado mediante ADB (UID 2000) y puede requerir reinicio tras cada reboot. Las estadísticas de tráfico son agregadas por UID: no muestran por sí solas IPs, dominios ni sockets activos.</Text></View>
+
+      <View style={styles.card}>
+        <CardTitle title="VPN local · destinos por app" note="Túnel TCP/UDP nativo con relay local; no requiere root ni Shizuku." />
+        <Text style={styles.body}>Android exige consentimiento del sistema y permite una sola VPN activa por perfil. NetADB no reemplaza otra VPN en silencio. La captura se limita a la app elegida; la lista de destinos y contadores existe en memoria mientras dura la sesión y se borra al detenerla.</Text>
+        {Platform.OS !== "android" ? <Text style={styles.empty}>Disponible únicamente en el APK Android. Esta vista web no puede crear una VPN del dispositivo.</Text> : null}
+        {vpnStatus ? <View style={[styles.vpnStatus, vpnStatus.running && styles.vpnStatusActive]}>
+          <Text style={styles.label}>ESTADO · {vpnStatus.state.toUpperCase()}</Text>
+          <Text style={styles.subLabel}>{vpnStatus.message}</Text>
+        </View> : <Text style={styles.empty}>Consulta el estado del servicio VPN.</Text>}
+        {vpnStatus?.otherVpnActive ? <View style={styles.notice}><Text style={styles.noticeIcon}>!</Text><Text style={styles.noticeText}>Android detecta otra VPN activa. Deténla explícitamente desde Android antes de usar NetADB; NetADB no solicitará sustituirla.</Text></View> : null}
+        <View style={styles.buttonRow}>
+          <Button label={vpnLoading ? "CARGANDO…" : "CARGAR APPS"} secondary onPress={() => void loadVpnTargets()} disabled={!NetadbBridge || vpnLoading || vpnBusy} />
+          <Button label={vpnStatus?.permissionGranted ? "VPN AUTORIZADA" : "AUTORIZAR VPN"} secondary onPress={() => void requestVpnAccess()} disabled={!NetadbBridge || vpnBusy || Boolean(vpnStatus?.otherVpnActive)} />
+          <Button label={vpnBusy ? "INICIANDO…" : "INICIAR CAPTURA"} onPress={startLocalVpn} disabled={!NetadbBridge || !vpnTargetPackage || !vpnStatus?.permissionGranted || Boolean(vpnStatus?.otherVpnActive) || Boolean(vpnStatus?.running) || vpnBusy} />
+          {vpnStatus?.running ? <Button label="DETENER CAPTURA" danger onPress={() => void stopLocalVpn()} disabled={vpnBusy} /> : null}
+          <Button label="ACTUALIZAR" secondary onPress={() => void refreshVpnStatus()} disabled={!NetadbBridge || vpnBusy} />
+        </View>
+        {vpnTargets.length > 0 ? <>
+          <TextInput value={vpnQuery} onChangeText={setVpnQuery} placeholder="Filtrar apps por nombre o paquete" placeholderTextColor="#64746a" autoCapitalize="none" autoCorrect={false} style={styles.input} selectionColor={C.green} />
+          {filteredVpnTargets.length === 0 ? <Text style={styles.empty}>No hay coincidencias.</Text> : filteredVpnTargets.slice(0, 80).map((target) => {
+            const active = vpnTargetPackage === target.packageName;
+            return <Pressable key={target.packageName} onPress={() => setVpnTargetPackage(target.packageName)} style={[styles.vpnTarget, active && styles.vpnTargetActive]} accessibilityRole="button" accessibilityLabel={`Seleccionar ${target.label} para VPN`}>
+              <Text style={styles.packageName}>{target.label}</Text>
+              <Text style={styles.appMeta}>{target.systemApp ? "SISTEMA" : "USUARIO"} · {target.packageName}</Text>
+            </Pressable>;
+          })}
+          {filteredVpnTargets.length > 80 ? <Text style={styles.subLabel}>Mostrando 80 de {filteredVpnTargets.length}; afina el filtro.</Text> : null}
+        </> : <Text style={styles.empty}>Carga las aplicaciones instaladas y selecciona exactamente una antes de iniciar.</Text>}
+        {vpnStatus?.running ? <>
+          <View style={styles.infoGrid}>
+            <Info label="TÚNEL · TX" value={`${formatBytes(vpnStatus.txBytes)} · ${vpnStatus.txPackets} paquetes`} />
+            <Info label="TÚNEL · RX" value={`${formatBytes(vpnStatus.rxBytes)} · ${vpnStatus.rxPackets} paquetes`} />
+          </View>
+          <Text style={styles.subLabel}>Los bytes y paquetes son contadores globales de la interfaz TUN seleccionada y pueden no equivaler a datos entregados por una app remota. Cada CONNECT TCP es un destino solicitado; no prueba que la conexión se completara. No se intercepta ni descifra TLS.</Text>
+          <View style={styles.detailBlock}>
+            <Text style={styles.label}>DESTINOS OBSERVADOS · {vpnStatus.connections.length}</Text>
+            {vpnStatus.connections.length === 0 ? <Text style={styles.empty}>Aún no se observaron solicitudes TCP ni datagramas UDP.</Text> : vpnStatus.connections.slice(0, 40).map((connection) => <View key={`${connection.protocol}:${connection.endpoint}`} style={styles.vpnEvent}>
+              <Text selectable style={styles.packageName}>{connection.protocol.toUpperCase()} · {connection.endpoint}</Text>
+              <Text style={styles.subLabel}>Visto {new Date(connection.lastSeen).toLocaleTimeString()} · eventos {connection.events}{connection.protocol === "udp" ? ` · ${formatBytes(connection.bytes)} en datagramas observados` : connection.openObserved ? " · solicitud CONNECT observada" : ""}</Text>
+            </View>)}
+          </View>
+        </> : null}
+        <Text style={styles.subLabel}>Solo metadatos de conexión. No registra contenido, no hace MITM/TLS, no prueba conexiones entrantes espontáneas y no lee la memoria de apps.</Text>
+      </View>
 
       <View style={styles.card}>
         <CardTitle title="Inventario de paquetes" note="Por defecto muestra apps del sistema. Puedes incluir apps de usuario." />
@@ -177,12 +313,12 @@ export default function AppsScreen() {
           </View>
           <View style={styles.detailBlock}><Text style={styles.label}>PERMISOS Y COMPONENTES · dumpsys package</Text><Text selectable style={styles.raw}>{inspection.packageDump || "Android no entregó datos."}</Text></View>
           <View style={styles.detailBlock}><Text style={styles.label}>APP OPS · estado devuelto por Android</Text><Text selectable style={styles.raw}>{inspection.appOps || "AppOps no disponible."}</Text>{inspection.appOpsExitCode !== 0 ? <Text style={styles.subLabel}>La consulta AppOps no terminó con código 0 ({inspection.appOpsExitCode}).</Text> : null}</View>
-          <View style={styles.detailBlock}><Text style={styles.label}>TRÁFICO AGREGADO POR UID</Text><Text selectable style={styles.raw}>{inspection.networkStatsAvailable ? inspection.networkStats : "Android no entregó filas de netstats para este UID. No equivale a cero tráfico."}</Text><Text style={styles.subLabel}>No identifica destinos, dominios ni conexiones activas. Para observar endpoints se necesita captura VPN local consentida; consulta la explicación inferior.</Text></View>
+          <View style={styles.detailBlock}><Text style={styles.label}>TRÁFICO AGREGADO POR UID</Text><Text selectable style={styles.raw}>{inspection.networkStatsAvailable ? inspection.networkStats : "Android no entregó filas de netstats para este UID. No equivale a cero tráfico."}</Text><Text style={styles.subLabel}>No identifica destinos, dominios ni conexiones activas. Para observar endpoints se necesita captura VPN local consentida; consulta la sección VPN local anterior.</Text></View>
         </> : <Text style={styles.empty}>La ficha aparece aquí al inspeccionar un paquete del inventario.</Text>}
       </View>
 
       <View style={styles.card}><CardTitle title="Qué puede y qué no puede hacer" /><Text style={styles.body}>Sin root, Android no permite a NetADB leer la memoria de otra app ni inyectarse en Zygote. Shizuku puede ejecutar consultas permitidas como ADB/shell. Las acciones de detener, deshabilitar o habilitar requieren confirmación en cada caso; no hay desinstalación ni borrado de datos.</Text><Text style={styles.subLabel}>La inspección no captura paquetes ni revela el contenido cifrado TLS. Solo muestra lo que Android expone al usuario shell.</Text></View>
-      <Text style={styles.footer}>NETADB · SHIZUKU / READ-ONLY INSPECTION</Text>
+      <Text style={styles.footer}>NETADB · SHIZUKU + VPN / LOCAL DIAGNOSTICS</Text>
     </ScrollView>
   </ScreenContainer>;
 }
@@ -196,6 +332,7 @@ const styles = StyleSheet.create({
   notice: { flexDirection: "row", backgroundColor: "#2c2518", borderRadius: 10, padding: 11, gap: 9, alignItems: "flex-start" }, noticeIcon: { color: C.amber, fontFamily: "monospace", fontWeight: "900" }, noticeText: { color: "#cfb889", fontSize: 10, lineHeight: 15, flex: 1 },
   switchRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 3 }, label: { color: C.text, fontSize: 11, fontWeight: "700" }, subLabel: { color: C.muted, fontSize: 9, lineHeight: 14 }, input: { minHeight: 43, borderWidth: 1, borderColor: C.border, backgroundColor: "#101713", borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, color: C.text, fontFamily: "monospace", fontSize: 11 }, empty: { color: C.muted, fontSize: 11, lineHeight: 16, paddingVertical: 5 },
   appRow: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.border, paddingTop: 10, paddingBottom: 7, gap: 9 }, packageName: { color: C.text, fontSize: 11, fontFamily: "monospace", lineHeight: 16 }, appMeta: { color: C.muted, fontSize: 8, fontFamily: "monospace", letterSpacing: 0.35 }, appActions: { flexDirection: "row", flexWrap: "wrap", gap: 6 }, miniButton: { borderWidth: 1, borderColor: "#426947", backgroundColor: "#203126", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 }, miniDanger: { borderColor: "#705c38", backgroundColor: "#2d2619" }, miniText: { color: C.green, fontSize: 8, fontFamily: "monospace", fontWeight: "800", letterSpacing: 0.3 },
+  vpnStatus: { backgroundColor: "#1d241e", borderWidth: 1, borderColor: C.border, borderRadius: 10, padding: 11, gap: 5 }, vpnStatusActive: { backgroundColor: "#17291b", borderColor: "#4d9444" }, vpnTarget: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.border, paddingVertical: 9, paddingHorizontal: 8, gap: 3 }, vpnTargetActive: { backgroundColor: "#1c3320", borderWidth: 1, borderColor: "#4d9444", borderRadius: 8 }, vpnEvent: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.border, paddingTop: 9, paddingBottom: 3, gap: 4 },
   message: { backgroundColor: "#16231b", borderColor: "#315638", borderWidth: 1, borderRadius: 10, padding: 11 }, messageBad: { backgroundColor: "#2b1d20", borderColor: "#704448" }, messageWarn: { backgroundColor: "#2c2518", borderColor: "#705c38" }, messageText: { color: C.text, fontSize: 10, lineHeight: 15 },
   infoGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 }, info: { width: "48%", flexGrow: 1, backgroundColor: C.panel2, borderWidth: 1, borderColor: C.border, borderRadius: 9, padding: 9, gap: 4 }, infoLabel: { color: C.muted, fontSize: 8, fontFamily: "monospace", letterSpacing: 0.6 }, infoValue: { color: C.text, fontSize: 10, lineHeight: 15 }, detailBlock: { gap: 7, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.border, paddingTop: 10 }, raw: { color: "#b9c9bc", fontFamily: "monospace", fontSize: 9, lineHeight: 14 }, footer: { color: "#536157", fontSize: 8, fontFamily: "monospace", letterSpacing: 1.2, textAlign: "center", paddingVertical: 5 },
 });
