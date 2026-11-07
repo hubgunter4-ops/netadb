@@ -14,10 +14,14 @@ on:
       - ".github/workflows/eas-build.yml"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-android:
     name: Build Android APK locally
     runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
     env:
       EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
       EAS_LOCAL_BUILD_ARTIFACTS_DIR: ${{ github.workspace }}/artifacts
@@ -54,6 +58,20 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Calculate release version
+        shell: bash
+        run: |
+          base_version=$(grep -oP 'appVersionBase = "\K[0-9]+\.[0-9]+\.[0-9]+' app.config.ts | head -n 1)
+          IFS='.' read -r major minor base_patch <<< "$base_version"
+          patch=$GITHUB_RUN_NUMBER
+          if (( patch <= base_patch )); then patch=$((base_patch + GITHUB_RUN_NUMBER)); fi
+          app_version="$major.$minor.$patch"
+          version_code=$((100000 + GITHUB_RUN_NUMBER))
+          echo "APP_VERSION=$app_version" >> "$GITHUB_ENV"
+          echo "APP_VERSION_CODE=$version_code" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=v$app_version" >> "$GITHUB_ENV"
+          echo "Building NetADB $app_version (versionCode $version_code)"
+
       - name: Configure Gradle memory for GitHub runner
         run: |
           gradle_user_home="${GRADLE_USER_HOME:-$HOME/.gradle}"
@@ -74,3 +92,21 @@ jobs:
           path: ${{ github.workspace }}/artifacts/*.apk
           if-no-files-found: error
           retention-days: 7
+
+      - name: Publish versioned GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          apks=(artifacts/*.apk)
+          if (( ${#apks[@]} != 1 )); then
+            echo "Expected exactly one APK in artifacts/, found ${#apks[@]}"
+            exit 1
+          fi
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${apks[0]}" --clobber
+          else
+            gh release create "$RELEASE_TAG" "${apks[0]}" \
+              --title "NetADB $APP_VERSION" \
+              --generate-notes
+          fi
