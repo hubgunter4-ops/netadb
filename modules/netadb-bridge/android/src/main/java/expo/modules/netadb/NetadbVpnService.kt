@@ -155,6 +155,10 @@ class NetadbVpnService : VpnService() {
         check(!hasOtherVpn(this)) {
           "Se activó otra VPN antes de establecer el TUN. NetADB no la reemplazará."
         }
+        // establish() publica inmediatamente una red VPN en ConnectivityManager. Marca
+        // nuestra interfaz como propia antes de que Android la haga visible; de lo
+        // contrario, el chequeo de concurrencia puede confundir nuestro TUN con otra VPN
+        // y detener el arranque justo después de mostrar el consentimiento.
         tunnelFd = builder.establish() ?: throw IllegalStateException("Android no pudo crear la interfaz VPN TUN.")
         ownVpnEstablished = true
         check(!stopRequested.get()) { "Inicio cancelado." }

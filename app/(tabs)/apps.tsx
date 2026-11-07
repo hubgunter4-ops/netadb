@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, AppState, Linking, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { ScreenContainer } from "@/components/screen-container";
 import { NetadbBridge } from "@/modules/netadb-bridge";
@@ -46,6 +46,7 @@ export default function AppsScreen() {
   const [vpnLoading, setVpnLoading] = useState(false);
   const [vpnBusy, setVpnBusy] = useState(false);
   const [message, setMessage] = useState<Message | null>(null);
+  const pendingVpnStart = useRef(false);
 
   const refreshStatus = useCallback(async () => {
     if (!NetadbBridge) {
@@ -73,10 +74,37 @@ export default function AppsScreen() {
     void refreshStatus();
     void refreshVpnStatus();
     const subscription = AppState.addEventListener("change", (state) => {
-      if (state === "active") { void refreshStatus(); void refreshVpnStatus(); }
+      if (state === "active") {
+        void (async () => {
+          await refreshStatus();
+          await refreshVpnStatus();
+          // VpnService.prepare() returns before the Android consent screen finishes.
+          // Continue the requested start when the app becomes active again.
+          if (pendingVpnStart.current && NetadbBridge) {
+            const next = await NetadbBridge.getVpnCaptureStatus();
+            if (next.permissionGranted) {
+              pendingVpnStart.current = false;
+              const target = next.packageName || vpnTargetPackage;
+              if (target) {
+                try {
+                  setVpnBusy(true);
+                  await NetadbBridge.startVpnCapture(target);
+                  setMessage({ tone: "warn", text: "VPN local iniciándose. Comprueba que el estado cambie a ACTIVA." });
+                  await refreshVpnStatus();
+                } catch (error) {
+                  pendingVpnStart.current = false;
+                  setMessage({ tone: "bad", text: `La autorización terminó, pero la VPN no inició: ${String(error)}` });
+                } finally {
+                  setVpnBusy(false);
+                }
+              }
+            }
+          }
+        })();
+      }
     });
     return () => subscription.remove();
-  }, [refreshStatus, refreshVpnStatus]);
+  }, [refreshStatus, refreshVpnStatus, vpnTargetPackage]);
 
   useEffect(() => {
     if (!vpnStatus?.running) return;
@@ -166,9 +194,24 @@ export default function AppsScreen() {
     if (!NetadbBridge) return;
     try {
       const result = await NetadbBridge.requestVpnConsent();
-      setMessage(result.permissionGranted
-        ? { tone: "good", text: "Android ya autorizó la VPN local de NetADB." }
-        : { tone: "warn", text: "Completa el consentimiento VPN de Android. Al volver a NetADB, comprueba el estado y pulsa INICIAR CAPTURA." });
+      const target = vpnTargetPackage;
+      if (result.promptLaunched && target) {
+        pendingVpnStart.current = true;
+        setMessage({ tone: "warn", text: "Completa el consentimiento VPN de Android; al volver, NetADB iniciará la captura automáticamente." });
+      } else if (result.permissionGranted && target) {
+        pendingVpnStart.current = false;
+        setVpnBusy(true);
+        try {
+          await NetadbBridge.startVpnCapture(target);
+          setMessage({ tone: "warn", text: "VPN local iniciándose. Comprueba que el estado cambie a ACTIVA." });
+        } finally {
+          setVpnBusy(false);
+        }
+      } else {
+        setMessage(result.permissionGranted
+          ? { tone: "good", text: "Android ya autorizó la VPN local de NetADB. Selecciona una app y pulsa INICIAR CAPTURA." }
+          : { tone: "warn", text: "Completa el consentimiento VPN de Android. Selecciona una app para iniciar automáticamente al volver." });
+      }
       await refreshVpnStatus();
     } catch (error) { setMessage({ tone: "bad", text: `No se pudo solicitar el permiso VPN: ${String(error)}` }); }
   };
