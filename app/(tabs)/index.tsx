@@ -54,6 +54,24 @@ function addBoundedLine(previous: string[], incoming: string): string[] {
   return next;
 }
 
+function connectionHint(raw: unknown, fallback: string): string {
+  const text = String(raw ?? "").trim();
+  const lower = text.toLowerCase();
+  if (lower.includes("timed out") || lower.includes("timeout") || lower.includes("agotado")) {
+    return `${fallback} El teléfono no respondió a tiempo. Mantén abierta Depuración inalámbrica y pulsa Reintentar.`;
+  }
+  if (lower.includes("pairing") || lower.includes("authenticate") || lower.includes("invalid") || lower.includes("código")) {
+    return `${fallback} El código puede haber caducado. Abre un código nuevo y vuelve a intentarlo.`;
+  }
+  if (lower.includes("refused") || lower.includes("failed to connect") || lower.includes("no route")) {
+    return `${fallback} Verifica que ambos dispositivos estén en la misma red Wi‑Fi y que Wireless debugging siga activo.`;
+  }
+  if (lower.includes("unauthorized")) {
+    return `${fallback} Desbloquea el teléfono y acepta la autorización RSA de ADB.`;
+  }
+  return text ? `${fallback} ${text}` : `${fallback} Revisa Wireless debugging y pulsa Reintentar.`;
+}
+
 export default function TerminalScreen() {
   const [modalVisible, setModalVisible] = useState(false);
   const [commandsVisible, setCommandsVisible] = useState(false);
@@ -140,6 +158,7 @@ export default function TerminalScreen() {
   const closeDialog = () => {
     setModalVisible(false);
     setPairingCode("");
+    setAutomaticPairingCode("");
   };
 
   const openShell = async (deviceSerial: string) => {
@@ -159,12 +178,12 @@ export default function TerminalScreen() {
       } else {
         activeShellSerial.current = "";
         setSessionState("error");
-        setNotice("No se pudo iniciar el shell ADB en el dispositivo seleccionado.");
+        setNotice(connectionHint(result.output, "No se pudo iniciar el shell ADB en el dispositivo seleccionado."));
       }
     } catch (error) {
       activeShellSerial.current = "";
       setSessionState("error");
-      setNotice(`No se pudo abrir el shell: ${String(error)}`);
+      setNotice(connectionHint(error, "No se pudo abrir el shell."));
       appendLine(`! Error al abrir shell: ${String(error)}`);
     }
   };
@@ -218,7 +237,7 @@ export default function TerminalScreen() {
       setAutomaticPairingCode("");
       if (!paired.success) {
         setSessionState("error");
-        setNotice(`No se completó el pairing. ${paired.output || "Revisa que la pantalla de pairing siga abierta."}`);
+        setNotice(connectionHint(paired.output, "No se completó el pairing."));
         return;
       }
       setNotice("Pairing completado. Descubriendo el endpoint ADB…");
@@ -240,7 +259,7 @@ export default function TerminalScreen() {
       }
     } catch (error) {
       setSessionState("error");
-      setNotice(`No se pudo descubrir el teléfono automáticamente: ${String(error)}`);
+      setNotice(connectionHint(error, "No se pudo descubrir el teléfono automáticamente."));
       appendLine(`! Descubrimiento ADB: ${String(error)}`);
     } finally {
       setBusy(false);
@@ -279,7 +298,7 @@ export default function TerminalScreen() {
 
       if (!result.connected) {
         setSessionState("error");
-        setNotice(`No se pudo conectar a ${endpoint}. ${result.output || ""}`);
+        setNotice(connectionHint(result.output, `No se pudo conectar a ${endpoint}.`));
       } else if (devices.length === 0) {
         setSessionState("offline");
         setNotice("ADB aceptó la conexión, pero no aparece un dispositivo autorizado.");
@@ -293,8 +312,37 @@ export default function TerminalScreen() {
       }
     } catch (error) {
       setSessionState("error");
-      setNotice(`Error de conexión: ${String(error)}`);
+      setNotice(connectionHint(error, "Error de conexión."));
       appendLine(`! Error de conexión: ${String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const reconnectAutomatically = async () => {
+    if (!NetadbBridge || busy) return;
+    setBusy(true);
+    setSessionState("connecting");
+    setNotice("Reintentando descubrimiento ADB…");
+    appendLine("$ adb connect <mDNS retry>");
+    try {
+      const result = await NetadbBridge.connectAutomatically();
+      if (result.output) result.output.trimEnd().split(/\r?\n/).forEach(appendLine);
+      const devices = result.connected ? result.devices ?? [] : [];
+      setAvailableDevices(devices);
+      if (devices.length === 1) {
+        await openShell(devices[0]);
+      } else if (devices.length > 1) {
+        setSessionState("choose-device");
+        setNotice(`Dispositivos encontrados: ${devices.length}. Selecciona uno para abrir el shell.`);
+      } else {
+        setSessionState("error");
+        setNotice(connectionHint(result.output, "No se encontró un dispositivo autorizado."));
+      }
+    } catch (error) {
+      setSessionState("error");
+      setNotice(connectionHint(error, "La reconexión automática no encontró Wireless debugging."));
+      appendLine(`! Reintento ADB: ${String(error)}`);
     } finally {
       setBusy(false);
     }
@@ -412,6 +460,11 @@ export default function TerminalScreen() {
         {notice ? (
           <View style={[styles.notice, sessionState === "error" && styles.noticeError]}>
             <Text style={styles.noticeText}>{notice}</Text>
+            {(sessionState === "error" || sessionState === "offline") && bridgeReady ? (
+              <Pressable accessibilityRole="button" disabled={busy} onPress={() => void (connectAddress.trim().includes(":") ? connectDevice() : reconnectAutomatically())} style={styles.noticeAction}>
+                <Text style={styles.noticeActionText}>{busy ? "REINTENTANDO…" : connectAddress.trim().includes(":") ? "REINTENTAR CONEXIÓN" : "REINTENTAR DESCUBRIMIENTO"}</Text>
+              </Pressable>
+            ) : null}
           </View>
         ) : null}
         {!NetadbBridge ? (
@@ -503,6 +556,12 @@ export default function TerminalScreen() {
                 <Text style={styles.dialogCopy}>
                   Abre “Pair using pairing code” en Depuración inalámbrica. El modo automático descubre el servicio local y solo solicita el código de seis dígitos.
                 </Text>
+                <View style={styles.guideCard}>
+                  <Text style={styles.guideTitle}>FLUJO GUIADO</Text>
+                  <Text style={styles.guideStep}><Text style={styles.guideMark}>{bridgeReady ? "OK" : "—"}</Text> 1. APK Android y puente ADB disponibles</Text>
+                  <Text style={styles.guideStep}><Text style={styles.guideMark}>{automaticPairingCode.length === 6 ? "OK" : "—"}</Text> 2. Introduce el código temporal de seis dígitos</Text>
+                  <Text style={styles.guideStep}><Text style={styles.guideMark}>{busy ? "…" : "—"}</Text> 3. Descubrir, emparejar y abrir shell</Text>
+                </View>
 
                 <Text style={styles.fieldLabel}>MODO AUTOMÁTICO · SOLO CÓDIGO</Text>
                 <TextInput
@@ -695,6 +754,8 @@ const styles = StyleSheet.create({
   notice: { paddingHorizontal: 15, paddingVertical: 8, backgroundColor: "#19241b", borderBottomWidth: 1, borderColor: C.border },
   noticeError: { backgroundColor: "#2a1d1d", borderColor: "#5c3939" },
   noticeText: { color: C.amber, fontSize: 10, lineHeight: 15 },
+  noticeAction: { alignSelf: "flex-start", marginTop: 6, paddingVertical: 5, paddingHorizontal: 8, borderRadius: 5, backgroundColor: "#392b1d", borderWidth: 1, borderColor: "#71552c" },
+  noticeActionText: { color: C.green, fontFamily: "monospace", fontSize: 8, fontWeight: "800" },
   previewNotice: { paddingHorizontal: 14, paddingVertical: 8, backgroundColor: "#272116", borderBottomWidth: 1, borderColor: "#463a22" },
   previewNoticeText: { color: C.amber, fontSize: 10, lineHeight: 15 },
   deviceList: { padding: 11, gap: 6, borderBottomWidth: 1, borderColor: C.border },
@@ -759,6 +820,10 @@ const styles = StyleSheet.create({
   dialogTitle: { color: C.text, fontWeight: "800", fontSize: 18 },
   dialogClose: { color: C.muted, fontSize: 26, paddingHorizontal: 5 },
   dialogCopy: { color: C.muted, fontSize: 11, lineHeight: 16, marginBottom: 3 },
+  guideCard: { padding: 10, borderRadius: 8, backgroundColor: "#0d160f", borderWidth: 1, borderColor: C.border, gap: 5, marginBottom: 3 },
+  guideTitle: { color: C.green, fontFamily: "monospace", fontSize: 8, fontWeight: "900", letterSpacing: 0.7 },
+  guideStep: { color: C.text, fontSize: 10, lineHeight: 15 },
+  guideMark: { color: C.green, fontFamily: "monospace", fontWeight: "900", fontSize: 9 },
   fieldLabel: { color: C.muted, fontFamily: "monospace", fontSize: 8, letterSpacing: 0.65, marginTop: 2, fontWeight: "700" },
   field: {
     minHeight: 42,

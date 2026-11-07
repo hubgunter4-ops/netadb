@@ -486,8 +486,17 @@ class NetadbBridgeModule : Module() {
   }
 
   private fun discoverAdbEndpoints(serviceType: String): List<String> {
+    repeat(3) { attempt ->
+      val endpoints = discoverAdbEndpointsOnce(serviceType)
+      if (endpoints.isNotEmpty()) return endpoints
+      if (attempt < 2) Thread.sleep(350L * (attempt + 1))
+    }
+    return emptyList()
+  }
+
+  private fun discoverAdbEndpointsOnce(serviceType: String): List<String> {
     val context = appContext.reactContext?.applicationContext ?: throw IllegalStateException("Contexto Android no disponible")
-    val nsd = context.getSystemService(NsdManager::class.java) ?: return null
+    val nsd = context.getSystemService(NsdManager::class.java) ?: return emptyList()
     val localAddresses = java.net.NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
       .flatMap { it.inetAddresses.toList() }.mapNotNull { it.hostAddress?.substringBefore('%') }.toSet()
     val result = java.util.concurrent.atomic.AtomicReference<List<String>?>(null)
