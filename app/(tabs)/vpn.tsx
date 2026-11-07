@@ -118,6 +118,10 @@ export default function VpnScreen() {
   const [trafficSamples, setTrafficSamples] = useState<TrafficSample[]>([]);
   const pulse = useMemo(() => new Animated.Value(1), []);
   const refreshInFlight = useRef(false);
+  const pendingConsentStart = useRef(false);
+  const consentLeftApp = useRef(false);
+  const consentTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [consentReturnCount, setConsentReturnCount] = useState(0);
   const lastTraffic = useRef<{ tx: number; rx: number; at: number } | null>(
     null,
   );
@@ -201,11 +205,21 @@ export default function VpnScreen() {
       void loadTargets();
     }, 0);
     const subscription = AppState.addEventListener("change", (state) => {
-      if (state === "active") void refresh();
+      if (state !== "active" && pendingConsentStart.current) {
+        consentLeftApp.current = true;
+      }
+      if (state === "active") {
+        void refresh();
+        if (consentLeftApp.current) {
+          consentLeftApp.current = false;
+          setConsentReturnCount((value) => value + 1);
+        }
+      }
     });
     return () => {
       clearTimeout(initial);
       subscription.remove();
+      if (consentTimeout.current) clearTimeout(consentTimeout.current);
     };
   }, [loadTargets, refresh]);
 
@@ -287,8 +301,8 @@ export default function VpnScreen() {
     [selected, targets],
   );
 
-  const authorize = async () => {
-    if (!NetadbBridge) return;
+  const authorize = async (): Promise<boolean | null> => {
+    if (!NetadbBridge) return null;
     try {
       const result = await NetadbBridge.requestVpnConsent();
       setMessage(
@@ -297,23 +311,27 @@ export default function VpnScreen() {
           : "Permiso VPN de Android concedido. Ya puedes iniciar la captura.",
       );
       await refresh();
+      return result.promptLaunched;
     } catch (error) {
       setMessage(`No se pudo autorizar la VPN: ${String(error)}`);
       await refresh();
+      return null;
     }
   };
 
-  const start = async () => {
+  const start = useCallback(async () => {
     if (!NetadbBridge || !selected || busy) return;
-    if (status?.otherVpnActive) {
-      setMessage(
-        "Android detectó otra VPN activa. Detén esa VPN antes de iniciar NetADB.",
-      );
-      return;
-    }
     setBusy(true);
     setMessage(`Solicitando VPN para ${selected}…`);
     try {
+      const latest = await NetadbBridge.getVpnCaptureStatus();
+      applyStatus(latest);
+      if (latest.otherVpnActive) {
+        setMessage(
+          "Android detectó otra VPN activa. Detén esa VPN antes de iniciar NetADB.",
+        );
+        return;
+      }
       await NetadbBridge.startVpnCapture(selected);
       setMessage("Android está preparando el túnel. Esperando confirmación…");
       for (let attempt = 0; attempt < 30; attempt++) {
@@ -346,7 +364,7 @@ export default function VpnScreen() {
     } finally {
       setBusy(false);
     }
-  };
+  }, [selected, busy, applyStatus, refresh]);
 
   const stop = async () => {
     if (!NetadbBridge || busy) return;
@@ -372,7 +390,21 @@ export default function VpnScreen() {
       return;
     }
     if (!status?.permissionGranted) {
-      void authorize();
+      pendingConsentStart.current = true;
+      consentLeftApp.current = false;
+      if (consentTimeout.current) clearTimeout(consentTimeout.current);
+      consentTimeout.current = setTimeout(() => {
+        pendingConsentStart.current = false;
+        consentLeftApp.current = false;
+        consentTimeout.current = null;
+      }, 60_000);
+      void authorize().then((promptLaunched) => {
+        if (promptLaunched === true) return;
+        pendingConsentStart.current = false;
+        if (consentTimeout.current) clearTimeout(consentTimeout.current);
+        consentTimeout.current = null;
+        if (promptLaunched === false) void start();
+      });
       return;
     }
     if (!selected) {
@@ -384,6 +416,40 @@ export default function VpnScreen() {
     }
     void start();
   };
+
+  useEffect(() => {
+    if (consentReturnCount === 0 || !pendingConsentStart.current) return;
+    const timer = setTimeout(async () => {
+      if (!pendingConsentStart.current) return;
+      pendingConsentStart.current = false;
+      if (consentTimeout.current) clearTimeout(consentTimeout.current);
+      consentTimeout.current = null;
+      if (!NetadbBridge) return;
+      try {
+        const latest = await NetadbBridge.getVpnCaptureStatus();
+        applyStatus(latest);
+        if (!latest.permissionGranted) {
+          setMessage(
+            "No se concedió el permiso VPN de Android. Actívalo y vuelve a intentarlo.",
+          );
+          return;
+        }
+        if (!selected) {
+          setShowAppPicker(true);
+          setMessage(
+            "Permiso concedido. Selecciona una aplicación y activa el interruptor VPN.",
+          );
+          return;
+        }
+        await start();
+      } catch (error) {
+        setMessage(
+          `No se pudo reanudar el inicio tras el permiso: ${String(error)}`,
+        );
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [consentReturnCount, selected, applyStatus, start]);
 
   const exportLog = async (format: "json" | "csv") => {
     if (!NetadbBridge || !status?.running) {
