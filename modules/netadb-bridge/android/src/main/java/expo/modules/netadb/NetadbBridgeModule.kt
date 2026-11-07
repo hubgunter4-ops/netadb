@@ -4,6 +4,7 @@ import android.content.Intent
 import androidx.core.content.FileProvider
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import java.io.BufferedWriter
 import java.io.File
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
@@ -11,10 +12,15 @@ import kotlin.concurrent.thread
 class NetadbBridgeModule : Module() {
   private var logcatProcess: Process? = null
   private var logcatThread: Thread? = null
+  private val shellLock = Any()
+  private var shellProcess: Process? = null
+  private var shellInput: BufferedWriter? = null
+  private var shellThread: Thread? = null
+  private var shellSerial: String? = null
 
   override fun definition() = ModuleDefinition {
     Name("NetadbBridge")
-    Events("onLogLine")
+    Events("onLogLine", "onShellLine", "onShellState")
 
     AsyncFunction("isAvailable") {
       val app = appContext.reactContext?.applicationContext
@@ -172,6 +178,61 @@ class NetadbBridgeModule : Module() {
       mapOf("output" to result.output, "exitCode" to result.exitCode)
     }
 
+    AsyncFunction("openShell") { serial: String ->
+      require(serial.matches(Regex("[A-Za-z0-9._:-]{1,128}"))) { "Identificador de dispositivo inválido" }
+      closeShellInternal(emitClosed = false)
+      val process = adbProcessBuilder(adbPath(), listOf("-s", serial, "shell")).start()
+      if (process.waitFor(500, TimeUnit.MILLISECONDS)) {
+        val output = process.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText().trim() }
+        val exitCode = process.exitValue()
+        val message = output.ifBlank { "ADB shell terminó al iniciar (código $exitCode)" }
+        sendShellState(serial, "error", message = message, exitCode = exitCode)
+        return@AsyncFunction mapOf("ready" to false, "serial" to serial, "output" to output)
+      }
+      if (!process.isAlive) {
+        val output = process.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText().trim() }
+        val message = output.ifBlank { "ADB shell dejó de ejecutarse durante el inicio" }
+        sendShellState(serial, "error", message = message)
+        return@AsyncFunction mapOf("ready" to false, "serial" to serial, "output" to output)
+      }
+      val input = process.outputStream.bufferedWriter(Charsets.UTF_8)
+      synchronized(shellLock) { shellProcess = process; shellInput = input; shellSerial = serial }
+      shellThread = thread(name = "NetADB-shell", isDaemon = true) {
+        try {
+          process.inputStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
+            lines.forEach { line -> sendEvent("onShellLine", mapOf("serial" to serial, "line" to line)) }
+          }
+          val code = if (process.waitFor(2, TimeUnit.SECONDS)) process.exitValue() else 124
+          if (process.isAlive) process.destroyForcibly()
+          val stillCurrent = synchronized(shellLock) { shellProcess === process }
+          if (stillCurrent) sendShellState(serial, if (code == 0) "closed" else "error", exitCode = code)
+        } catch (e: Exception) {
+          val stillCurrent = synchronized(shellLock) { shellProcess === process }
+          if (stillCurrent && process.isAlive) sendShellState(serial, "error", message = e.message ?: "Error leyendo shell")
+        } finally {
+          synchronized(shellLock) {
+            if (shellProcess === process) { shellProcess = null; shellInput = null; shellThread = null; shellSerial = null }
+          }
+        }
+      }
+      sendShellState(serial, "ready")
+      mapOf("ready" to true, "serial" to serial)
+    }
+
+    AsyncFunction("sendShellCommand") { command: String ->
+      require(command.isNotBlank() && command.length <= 10000 && !command.contains('\n') && !command.contains('\r')) {
+        "Comando vacío, multilínea o demasiado largo"
+      }
+      synchronized(shellLock) {
+        val process = shellProcess ?: return@synchronized false
+        val input = shellInput ?: return@synchronized false
+        if (!process.isAlive) return@synchronized false
+        runCatching { input.apply { write(command); newLine(); flush() } }.isSuccess
+      }
+    }
+
+    AsyncFunction("closeShell") { closeShellInternal(); true }
+
     Function("startLogcat") { serial: String, buffers: List<String> ->
       require(serial.matches(Regex("[A-Za-z0-9._:-]{1,128}"))) { "Identificador de dispositivo inválido" }
       val allowed = setOf("main", "system", "events", "radio", "crash")
@@ -224,6 +285,7 @@ class NetadbBridgeModule : Module() {
 
     OnDestroy {
       stopLogcatInternal()
+      closeShellInternal()
     }
   }
 
@@ -267,6 +329,37 @@ class NetadbBridgeModule : Module() {
     }
     logcatProcess = null
     logcatThread = null
+  }
+
+  private fun sendShellState(serial: String, state: String, message: String? = null, exitCode: Int? = null) {
+    val payload = mutableMapOf<String, Any>("serial" to serial, "state" to state)
+    if (message != null) payload["message"] = message
+    if (exitCode != null) payload["exitCode"] = exitCode
+    sendEvent("onShellState", payload)
+  }
+
+  private fun closeShellInternal(emitClosed: Boolean = true) {
+    val process: Process?
+    val input: BufferedWriter?
+    val worker: Thread?
+    val serial: String?
+    synchronized(shellLock) {
+      process = shellProcess
+      input = shellInput
+      worker = shellThread
+      serial = shellSerial
+      shellProcess = null
+      shellInput = null
+      shellThread = null
+      shellSerial = null
+    }
+    if (process != null) {
+      runCatching { input?.close() }
+      process.destroy()
+      if (!runCatching { process.waitFor(300, TimeUnit.MILLISECONDS) }.getOrDefault(false)) process.destroyForcibly()
+    }
+    if (worker != null && worker !== Thread.currentThread()) runCatching { worker.join(300) }
+    if (emitClosed && serial != null) sendShellState(serial, "closed")
   }
 
   private fun appFilesDir(): File = appContext.reactContext?.applicationContext?.filesDir

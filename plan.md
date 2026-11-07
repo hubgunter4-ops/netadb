@@ -8,7 +8,7 @@ Las capturas incluirán `dumpsys connectivity`, `netstats`, `dnsresolver` y `wif
 
 ## Arquitectura y limitaciones
 
-- **Interfaz**: Expo Router, React Native y NativeWind con navegación vertical simple y controles aptos para uso con una mano.
+- **Interfaz**: Expo Router, React Native y NativeWind. La ruta inicial será una terminal inspirada en la jerarquía original de LADB: barra compacta de estado, área de salida monoespaciada desplazable y entrada de comandos anclada al borde inferior; pairing/conexión en diálogo táctil. Un catálogo de comandos frecuentes de solo lectura carga el comando elegido en el input y nunca lo ejecuta automáticamente. Diagnóstico y licencias quedan accesibles en pestañas separadas.
 - **Módulo Android local**: paquete Expo Module bajo `modules/netadb-bridge/`, escrito en Kotlin, empaquetando `libadb.so` para ABI Android. Empareja con código temporal para la dirección temporal y luego conecta al endpoint ADB independiente, detecta dispositivos y exige selección explícita si hay más de uno. No implementa USB/OTG ni intenta activar depuración o cambiar ajustes protegidos por el usuario.
 - **Servicios de diagnóstico**: funciones TypeScript organizadas por capturas, parsing/clasificación, conntrack, sesión y exportación. El parser de conntrack opera sobre texto pegado o importado; no sigue rutas de archivos privados del router ni captura paquetes de red.
 - **Persistencia y exportación**: estado de sesión en memoria mientras corre la interfaz; TXT/ZIP/JSON exportados permanecen en almacenamiento privado hasta borrado explícito o desinstalación. Incluye acción confirmada para detener streams y limpiar archivos propios. Evitar telemetría de servidor y no subir datos diagnósticos.
@@ -23,9 +23,9 @@ Tres direcciones evaluadas: **Terminal Fósforo** (0.07), **Instrumentación Ár
 - **Movimiento**: terminales de laboratorio y consola de sistemas, reinterpretadas para una app móvil táctil.
 - **Principios**: densidad técnica legible; estado de conexión inequívoco; anomalías con codificación cromática consistente; datos sensibles bajo control del usuario.
 - **Color**: base verde-negra casi mate para sesiones largas y bajo deslumbramiento; verde fósforo como identidad y estado sano; ámbar para advertencias, rojo para candidatos entrantes o fallos y cian para DNS.
-- **Layout**: encabezado operativo compacto, una tarjeta de estado de conexión, pestañas inferiores Diagnóstico/Licencias y bloques verticales en vez de cuadrícula de escritorio.
+- **Layout**: terminal como superficie primaria a pantalla completa, con salida seleccionable y scroll automático; entrada “Waiting for connection…” hasta autorizar el shell, barra superior de estado/acciones y pestañas inferiores Terminal/Diagnóstico/Licencias.
 - **Elementos distintivos**: indicador LED de sesión; línea de tiempo monoespaciada con marcas UTC; chips de clasificación con borde luminoso discreto.
-- **Interacción**: acciones primarias grandes, selección explícita antes de datos sensibles, controles de pausa/parada siempre visibles, permisos y limitaciones explicados junto a la acción.
+- **Interacción**: acciones primarias grandes, selección explícita antes de datos sensibles, comandos de catálogo sujetos a confirmación de Enviar, controles de pausa/parada siempre visibles, permisos y limitaciones explicados junto a la acción.
 - **Animación**: transiciones breves de opacidad y desplazamiento (120–180 ms); pulso lento solo mientras una captura esté activa; sin movimiento continuo en estados quietos.
 - **Tipografía**: JetBrains Mono para terminales, marcas de tiempo y valores; sans de sistema Android para instrucciones y textos largos. Títulos compactos y jerarquía de 12/14/18/24 sp.
 - **Esencia de marca**: herramienta local de diagnóstico Android para inspeccionar señales de conectividad con evidencia exportable; precisa, sobria y transparente.
@@ -35,9 +35,9 @@ Tres direcciones evaluadas: **Terminal Fósforo** (0.07), **Instrumentación Ár
 
 ## Estructura del proyecto
 
-- `app/`: pantallas y navegación Expo Router.
+- `app/`: `app/(tabs)/index.tsx` para la terminal, `diagnostics.tsx` para herramientas de diagnóstico y `licenses.tsx` para avisos; navegación Expo Router.
 - `components/`: botones, chips de estado, consola y tarjetas de diagnóstico.
 - `lib/diagnostics/`: comandos autorizados, clasificación de logcat, parser conntrack, timestamps UTC y exportación.
-- `modules/netadb-bridge/`: interfaz TS, Expo Module en Kotlin, recursos ADB por ABI y licencias.
+- `modules/netadb-bridge/`: interfaz TS, Expo Module en Kotlin, shell ADB persistente con eventos de salida, recursos ADB por ABI y licencias.
 - `assets/images/`: icono launcher, splash e iconografía adaptive.
 - `tests/`: pruebas deterministas para parsers y clasificadores.

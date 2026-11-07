@@ -3,6 +3,7 @@
 ## 1. Emparejamiento y sesión ADB inalámbrica
 - [ ] La app usa Wireless Debugging de Android y un ADB local embebido; solicita `host:puerto` de emparejamiento y código temporal, luego acepta el `host:puerto` de conexión independiente, sin guardar el código en archivos ni registros. Este APK no implementa USB/OTG.
 - [ ] La persona autoriza la depuración en Android. La app ofrece conexión y detección de dispositivos, selección inequívoca si hay varios y estados visibles para emparejando, conectado y error.
+- [ ] Si la conexión del endpoint ADB encuentra varios dispositivos, el estado de diagnóstico indica que falta elegir un serial y no presenta la sesión como ya seleccionada.
 - [ ] La app no activa ADB ni cambia ajustes seguros del teléfono sin autorización del sistema.
 
 ## 2. Capturas periódicas del sistema
@@ -31,3 +32,10 @@
 - [x] La app aplica el estilo Terminal Fósforo aprobado y registra un icono de launcher cuadrado y adaptativo coherente con NetADB.
 - [x] Los avisos legales de LADB y de las bibliotecas ADB reutilizadas se incluyen dentro de la app y acompañan las redistribuciones.
 - [ ] Preparar una build Android release firmada por el flujo administrado; entregar el APK instalable solo cuando la build real termine correctamente, destinado a instalación directa fuera de Google Play.
+
+## 7. Interfaz de terminal inspirada en LADB
+- [ ] La pantalla inicial usa la jerarquía de terminal de LADB: barra superior compacta con estado, área de salida monoespaciada desplazable/seleccionable que ocupa el espacio disponible y entrada de comando anclada abajo; el input muestra que espera conexión y permanece deshabilitado hasta que haya shell autorizado.
+- [ ] Un catálogo organizado de comandos ADB/Shell frecuentes permite seleccionar un comando y cargarlo en la línea de entrada; la selección no ejecuta el comando, que solo se envía al tocar Enviar.
+- [ ] El diálogo de conexión deja introducir el host:puerto de emparejamiento y el código temporal de 6 dígitos, borrar el código después de enviarlo y después aceptar por separado el host:puerto de Wireless debugging.
+- [ ] Tras elegir inequívocamente un dispositivo autorizado, la pantalla abre un shell ADB persistente para ese serial; envía los comandos del usuario, agrega el prompt/eco local y muestra las líneas recibidas, errores y estados de cierre en la consola.
+- [ ] Las herramientas de diagnóstico existentes permanecen disponibles en una pestaña propia; la pantalla Licencias sigue siendo accesible desde la navegación principal.

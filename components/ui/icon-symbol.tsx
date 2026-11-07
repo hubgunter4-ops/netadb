@@ -18,6 +18,9 @@ const MAPPING = {
   "paperplane.fill": "send",
   "chevron.left.forwardslash.chevron.right": "code",
   "chevron.right": "chevron-right",
+  "terminal.fill": "terminal",
+  "waveform.path.ecg": "monitor-heart",
+  "doc.text": "description",
 } satisfies IconMapping;
 
 /**

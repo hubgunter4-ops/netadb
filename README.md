@@ -4,6 +4,8 @@ App Android de diagnóstico de conectividad por ADB inalámbrico, con una interf
 
 ## Funciones
 
+- Terminal ADB con jerarquía inspirada en LADB: consola de salida monoespaciada y seleccionable, shell persistente y prompt fijo abajo. Emparejamiento y conexión se gestionan desde un diálogo, y Diagnóstico/Licencias siguen accesibles desde sus pestañas.
+- El botón **CMD** abre un catálogo de consultas frecuentes (`getprop`, `id`, `ip addr`, `ip route`, `dumpsys connectivity`, `dumpsys wifi`, paquetes instalados y logcat reciente). Seleccionar solo rellena la línea; nada se ejecuta hasta que la persona pulse **Enviar**. Se permite escribir comandos manualmente.
 - Empareja con Android Wireless debugging mediante una dirección `host:puerto` y código de 6 dígitos; luego conecta al endpoint de depuración independiente.
 - Detecta los dispositivos autorizados visibles para el daemon ADB integrado. Si hay más de uno, obliga a seleccionar serial antes de capturar.
 - Toma snapshots UTC con `dumpsys connectivity`, `netstats`, `dnsresolver` y `wifi`; `telephony.registry` solo se añade por opt-in y puede revelar datos de SIM/celdas.
