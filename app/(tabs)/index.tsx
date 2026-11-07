@@ -155,6 +155,38 @@ export default function TerminalScreen() {
     bridgeStatus?.available === true &&
     bridgeStatus.apiLevel >= 30;
 
+  const openDeveloperSettings = async () => {
+    if (!NetadbBridge) {
+      setNotice("El acceso a Ajustes está disponible en la app Android instalada.");
+      return;
+    }
+    try {
+      await NetadbBridge.openDeveloperSettings();
+      setNotice("Opciones de desarrollador abiertas. Activa Depuración inalámbrica y vuelve a NetADB.");
+    } catch (error) {
+      setNotice(`No se pudieron abrir Opciones de desarrollador: ${String(error)}`);
+    }
+  };
+
+  const detectPairingCode = async () => {
+    if (!NetadbBridge) {
+      setNotice("La detección del código está disponible en la app Android instalada.");
+      return;
+    }
+    try {
+      const code = await NetadbBridge.readPairingCodeFromClipboard();
+      if (!code) {
+        setNotice("No encontré un código de 6 dígitos en el portapapeles. Copia el código y vuelve a pulsar.");
+        return;
+      }
+      setPairingCode(code);
+      setAutomaticPairingCode(code);
+      setNotice("Código de 6 dígitos detectado. Elige el modo automático o manual para emparejar.");
+    } catch (error) {
+      setNotice(`No se pudo leer el portapapeles: ${String(error)}`);
+    }
+  };
+
   const closeDialog = () => {
     setModalVisible(false);
     setPairingCode("");
@@ -562,6 +594,10 @@ export default function TerminalScreen() {
                   <Text style={styles.guideStep}><Text style={styles.guideMark}>{automaticPairingCode.length === 6 ? "OK" : "—"}</Text> 2. Introduce el código temporal de seis dígitos</Text>
                   <Text style={styles.guideStep}><Text style={styles.guideMark}>{busy ? "…" : "—"}</Text> 3. Descubrir, emparejar y abrir shell</Text>
                 </View>
+                <Pressable accessibilityRole="button" disabled={!NetadbBridge} onPress={() => void openDeveloperSettings()} style={[styles.secondaryButton, !NetadbBridge && styles.disabled]}>
+                  <Text style={styles.secondaryButtonText}>ABRIR OPCIONES DE DESARROLLADOR</Text>
+                </Pressable>
+                <Text style={styles.webWarning}>En Ajustes, activa “Depuración inalámbrica” dentro de Opciones de desarrollador; Android no ofrece un enlace público garantizado al submenú directo.</Text>
 
                 <Text style={styles.fieldLabel}>MODO AUTOMÁTICO · SOLO CÓDIGO</Text>
                 <TextInput
@@ -576,6 +612,10 @@ export default function TerminalScreen() {
                   returnKeyType="done"
                   accessibilityLabel="Código temporal para descubrimiento automático"
                 />
+                <Pressable accessibilityRole="button" disabled={!NetadbBridge || busy} onPress={() => void detectPairingCode()} style={[styles.secondaryButton, (!NetadbBridge || busy) && styles.disabled]}>
+                  <Text style={styles.secondaryButtonText}>DETECTAR CÓDIGO COPIADO</Text>
+                </Pressable>
+                <Text style={styles.webWarning}>Lee el portapapeles solo al pulsar el botón; copia antes el código temporal de seis dígitos.</Text>
                 <Pressable accessibilityRole="button" disabled={!bridgeReady || busy} onPress={() => void pairAutomatically()} style={[styles.primaryButton, (!bridgeReady || busy) && styles.disabled]}>
                   <Text style={styles.primaryButtonText}>{busy ? "DESCUBRIENDO…" : "EMPAREJAR Y CONECTAR AUTOMÁTICAMENTE"}</Text>
                 </Pressable>
@@ -595,6 +635,7 @@ export default function TerminalScreen() {
                   keyboardType="url"
                   returnKeyType="next"
                 />
+                <Text style={styles.fieldHint}>Usa la IP del dispositivo objetivo y el puerto de pairing que muestra esa pantalla. El puerto de ADB es distinto; actualiza también su IP si cambió de red.</Text>
                 <Text style={styles.fieldLabel}>CÓDIGO TEMPORAL · 6 DÍGITOS</Text>
                 <TextInput
                   value={pairingCode}
@@ -824,7 +865,10 @@ const styles = StyleSheet.create({
   guideTitle: { color: C.green, fontFamily: "monospace", fontSize: 8, fontWeight: "900", letterSpacing: 0.7 },
   guideStep: { color: C.text, fontSize: 10, lineHeight: 15 },
   guideMark: { color: C.green, fontFamily: "monospace", fontWeight: "900", fontSize: 9 },
+  secondaryButton: { minHeight: 38, justifyContent: "center", alignItems: "center", borderRadius: 7, borderWidth: 1, borderColor: "#426d45", backgroundColor: "#17271a", paddingHorizontal: 10 },
+  secondaryButtonText: { color: C.green, fontFamily: "monospace", fontWeight: "800", fontSize: 8, textAlign: "center" },
   fieldLabel: { color: C.muted, fontFamily: "monospace", fontSize: 8, letterSpacing: 0.65, marginTop: 2, fontWeight: "700" },
+  fieldHint: { color: C.muted, fontSize: 9, lineHeight: 13, paddingHorizontal: 2 },
   field: {
     minHeight: 42,
     color: C.text,

@@ -1,6 +1,8 @@
 package expo.modules.netadb
 
+import android.content.ClipboardManager
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.app.AppOpsManager
@@ -79,6 +81,27 @@ class NetadbBridgeModule : Module() {
         ?: throw IllegalStateException("Contexto Android no disponible")
       context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
       true
+    }
+
+    AsyncFunction("openDeveloperSettings") {
+      val context = appContext.reactContext?.applicationContext
+        ?: throw IllegalStateException("Contexto Android no disponible")
+      context.startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+      true
+    }
+
+    AsyncFunction("readPairingCodeFromClipboard") {
+      val context = appContext.reactContext?.applicationContext
+        ?: throw IllegalStateException("Contexto Android no disponible")
+      val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+      val text = runCatching {
+        if (clipboard?.hasPrimaryClip() == true) {
+          clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
+        } else {
+          ""
+        }
+      }.getOrDefault("")
+      Regex("(?<!\\d)\\d{6}(?!\\d)").find(text)?.value
     }
 
     AsyncFunction("listStandardPackages") { includeUserApps: Boolean ->

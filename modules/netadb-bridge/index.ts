@@ -40,6 +40,8 @@ export type NetadbNativeModule = {
   getShizukuStatus(): Promise<ShizukuStatus>;
   getStandardAndroidStatus(): Promise<StandardAndroidStatus>;
   openStandardUsageAccessSettings(): Promise<boolean>;
+  openDeveloperSettings(): Promise<boolean>;
+  readPairingCodeFromClipboard(): Promise<string | null>;
   listStandardPackages(includeUserApps: boolean): Promise<ShizukuPackage[]>;
   inspectStandardPackage(packageName: string): Promise<ShizukuInspection>;
   requestShizukuPermission(): Promise<boolean>;

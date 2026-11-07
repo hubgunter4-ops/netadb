@@ -148,6 +148,7 @@ const config: ExpoConfig & { logoUrl: string } = {
         android: {
           buildArchs: ["armeabi-v7a", "arm64-v8a"],
           minSdkVersion: 24,
+          useLegacyPackaging: true,
         },
       },
     ],
