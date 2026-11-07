@@ -511,16 +511,10 @@ tunnel_init (int extern_tun_fd)
     offload = hev_config_get_tunnel_offload ();
 
     if (extern_tun_fd >= 0) {
-#ifndef _WIN32
-        int nonblock = 1;
-
-        res = ioctl (extern_tun_fd, FIONBIO, (char *)&nonblock);
-        if (res < 0) {
-            LOG_E ("socks5 tunnel non-blocking");
-            return -1;
-        }
-#endif
-
+        /* Android VpnService.Builder.establish() already returns a
+         * non-blocking descriptor. FIONBIO is not supported by every TUN
+         * implementation and treating its failure as fatal prevents the
+         * Android VPN engine from starting at all. */
         tun_fd = extern_tun_fd;
         hev_tunnel_set_offload (tun_fd, offload);
         return 0;

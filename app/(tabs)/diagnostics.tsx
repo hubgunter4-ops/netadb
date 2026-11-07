@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, KeyboardAvoidingView, PermissionsAndroid, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, Text, TextInput, View } from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Alert, AppState, KeyboardAvoidingView, PermissionsAndroid, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { Link } from "expo-router";
 import { AnimatedEntry } from "@/components/animated-entry";
 import { ScreenContainer } from "@/components/screen-container";
 import { useAdbSession } from "@/lib/adb-session-context";
 import { NetadbBridge } from "@/modules/netadb-bridge";
-import type { BridgeStatus } from "@/modules/netadb-bridge";
+import type { BridgeStatus, CellularNetworkType, NetworkSnapshot } from "@/modules/netadb-bridge";
 import { classifyLogcatLine, parseExternalInboundConntrack, SNAPSHOT_COMMANDS, utcTimestamp, type ClassifiedEvent } from "@/lib/diagnostics/parser";
 import { compareSnapshots } from "@/lib/diagnostics/snapshot-diff";
 
@@ -24,9 +24,14 @@ function SectionTitle({ index, title, note }: { index: string; title: string; no
   return <View style={styles.sectionTitleRow}><Text style={styles.sectionIndex}>{index}</Text><View style={{ flex: 1 }}><Text style={styles.sectionTitle}>{title}</Text>{note ? <Text style={styles.sectionNote}>{note}</Text> : null}</View></View>;
 }
 function Metric({ value, label }: { value: string; label: string }) { return <View style={styles.metric}><Text style={styles.metricValue}>{value}</Text><Text style={styles.metricLabel}>{label}</Text></View>; }
+function formatBytes(value: number) { if (value < 0) return "N/D"; if (value < 1024) return `${Math.round(value)} B`; if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`; return `${(value / 1024 / 1024).toFixed(1)} MiB`; }
 
 export default function HomeScreen() {
   const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus | null>(null);
+  const [networkSnapshot, setNetworkSnapshot] = useState<NetworkSnapshot | null>(null);
+  const [networkBusy, setNetworkBusy] = useState(false);
+  const [networkTrafficRate, setNetworkTrafficRate] = useState({ tx: 0, rx: 0 });
+  const [cellularType, setCellularType] = useState<CellularNetworkType | null>(null);
   const { connectedSerial } = useAdbSession();
   const serial = connectedSerial ?? "";
   const [busy, setBusy] = useState(false);
@@ -52,6 +57,8 @@ export default function HomeScreen() {
   const capturingRef = useRef(false);
   const logcatActiveRef = useRef(false);
   const logLineCount = useRef(0);
+  const networkRefreshInFlight = useRef(false);
+  const networkTrafficBaseline = useRef<{ tx: number; rx: number; at: number } | null>(null);
 
   useEffect(() => {
     if (!NetadbBridge) return;
@@ -63,6 +70,53 @@ export default function HomeScreen() {
     });
     return () => sub.remove();
   }, []);
+
+  const refreshNetworkSnapshot = useCallback(async (showBusy = true) => {
+    if (!NetadbBridge || networkRefreshInFlight.current) return;
+    networkRefreshInFlight.current = true;
+    if (showBusy) setNetworkBusy(true);
+    try {
+      const next = await NetadbBridge.getNetworkSnapshot();
+      const capturedAt = Date.now();
+      const previous = networkTrafficBaseline.current;
+      if (previous && next.traffic.deviceTxBytes >= previous.tx && next.traffic.deviceRxBytes >= previous.rx) {
+        const elapsed = Math.max(1, capturedAt - previous.at);
+        setNetworkTrafficRate({ tx: Math.round(((next.traffic.deviceTxBytes - previous.tx) * 1000) / elapsed), rx: Math.round(((next.traffic.deviceRxBytes - previous.rx) * 1000) / elapsed) });
+      }
+      networkTrafficBaseline.current = { tx: next.traffic.deviceTxBytes, rx: next.traffic.deviceRxBytes, at: capturedAt };
+      setNetworkSnapshot(next);
+    } catch (error) {
+      setConnectionMessage(`No se pudo consultar ConnectivityManager: ${String(error)}`);
+    } finally {
+      networkRefreshInFlight.current = false;
+      if (showBusy) setNetworkBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => void refreshNetworkSnapshot(false), 0);
+    const interval = setInterval(() => { if (AppState.currentState === "active") void refreshNetworkSnapshot(false); }, 2000);
+    return () => { clearTimeout(timer); clearInterval(interval); };
+  }, [refreshNetworkSnapshot]);
+
+  const detectCellularType = async () => {
+    if (!NetadbBridge) return;
+    try {
+      const result = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.READ_PHONE_STATE, {
+        title: "Consultar tipo de red celular",
+        message: "NetADB leerá el tipo de radio (por ejemplo, LTE o NR/5G). No consulta número telefónico, IMEI ni ubicación.",
+        buttonPositive: "Permitir",
+        buttonNegative: "Cancelar",
+      });
+      if (result !== PermissionsAndroid.RESULTS.GRANTED) {
+        setCellularType({ available: false, networkType: "PERMISO NO CONCEDIDO", note: "El monitor ConnectivityManager sigue disponible sin este permiso opcional." });
+        return;
+      }
+      setCellularType(await NetadbBridge.getCellularNetworkType());
+    } catch (error) {
+      setCellularType({ available: false, networkType: "ERROR", note: String(error) });
+    }
+  };
 
   const startVisibleSession = async (status: string) => {
     if (!NetadbBridge || !serial) return false;
@@ -266,8 +320,22 @@ export default function HomeScreen() {
           </View>
           <View style={styles.hero}>
             <Text style={styles.heroKicker}>DIAGNÓSTICO · SISTEMA · ADB</Text>
-            <Text style={styles.heroTitle}>Herramientas{"\n"}<Text style={{ color: C.green }}>del sistema.</Text></Text>
+            <Text style={styles.heroTitle}>Herramientas</Text>
             <Text style={styles.heroBody}>Diagnóstico y utilidades locales. Comparte solo los registros que revises y selecciones.</Text>
+          </View>
+          <View style={styles.dashboardGrid}>
+            <AnimatedEntry delay={50} style={styles.dashboardCell}>
+              <Link href="/(tabs)/index" asChild><Pressable style={styles.dashboardTile}><Text style={styles.dashboardIcon}>▣</Text><Text style={styles.dashboardTitle}>ADB / NetADB</Text><Text style={styles.dashboardCopy}>{serial ? "Shell conectado" : "Emparejar y abrir shell"}</Text><Text style={styles.dashboardArrow}>›</Text></Pressable></Link>
+            </AnimatedEntry>
+            <AnimatedEntry delay={100} style={styles.dashboardCell}>
+              <Pressable onPress={() => void refreshNetworkSnapshot()} style={styles.dashboardTile}><Text style={styles.dashboardIcon}>⌁</Text><Text style={styles.dashboardTitle}>Red y señales</Text><Text style={styles.dashboardCopy}>{networkSnapshot ? `${networkSnapshot.networkCount} redes · ${networkSnapshot.apiLevel}` : "ConnectivityManager"}</Text><Text style={styles.dashboardArrow}>↻</Text></Pressable>
+            </AnimatedEntry>
+            <AnimatedEntry delay={150} style={styles.dashboardCell}>
+              <Link href="/(tabs)/vpn" asChild><Pressable style={styles.dashboardTile}><Text style={styles.dashboardIcon}>◉</Text><Text style={styles.dashboardTitle}>VPN local</Text><Text style={styles.dashboardCopy}>Túnel Android por aplicación</Text><Text style={styles.dashboardArrow}>›</Text></Pressable></Link>
+            </AnimatedEntry>
+            <AnimatedEntry delay={200} style={styles.dashboardCell}>
+              <Link href="/(tabs)/shizuku" asChild><Pressable style={styles.dashboardTile}><Text style={styles.dashboardIcon}>▦</Text><Text style={styles.dashboardTitle}>Shizuku</Text><Text style={styles.dashboardCopy}>Servicios y paquetes</Text><Text style={styles.dashboardArrow}>›</Text></Pressable></Link>
+            </AnimatedEntry>
           </View>
           <View style={styles.statusCard}>
             <View style={styles.cardTopline}><Text style={styles.cardLabel}>SHELL ADB COMPARTIDO</Text><View style={[styles.statusDot, { backgroundColor: serial && bridgeStatus?.available ? C.green : C.amber }]} /></View>
@@ -285,7 +353,32 @@ export default function HomeScreen() {
             </View>
           </View>
           <View style={styles.section}>
-            <SectionTitle index="02" title="Captura del sistema" note="Snapshots UTC de conectividad y redes" />
+            <SectionTitle index="02" title="NetworkCapabilities" note="Transportes, conectividad y proxy HTTP" />
+            <View style={styles.panel}>
+              <Text style={styles.panelCopy}>ConnectivityManager informa las redes visibles ahora. INTERNET significa que la red está configurada para Internet; VALIDATED que Android comprobó acceso público. Actualiza para obtener otro snapshot.</Text>
+              <View style={styles.buttonRow}><View style={{ flex: 1 }}><Action title={networkBusy ? "CONSULTANDO…" : "ACTUALIZAR REDES"} onPress={() => void refreshNetworkSnapshot()} disabled={networkBusy || !NetadbBridge} /></View><View style={{ flex: 1 }}><Action title="DETECTAR RADIO CELULAR" onPress={() => void detectCellularType()} disabled={!NetadbBridge} secondary /></View></View>
+              {networkSnapshot ? <>
+                <View style={styles.metricsRow}><Metric value={String(networkSnapshot.networkCount)} label="REDES" /><Metric value={networkSnapshot.hasActiveNetwork ? "SÍ" : "NO"} label="RED PREDETERMINADA" /><Metric value={`API ${networkSnapshot.apiLevel}`} label="ANDROID" /></View>
+                <View style={styles.trafficReadout}><Text style={styles.panelHeading}>TRÁFICO EN TIEMPO REAL · TODAS LAS INTERFACES</Text><View style={styles.trafficPair}><View style={{ flex: 1 }}><Text style={styles.smallCaps}>TX · SUBIDA</Text><Text style={styles.proxyHost}>{networkSnapshot.traffic.deviceTxBytes < 0 ? "N/D" : `${formatBytes(networkTrafficRate.tx)}/s`}</Text><Text style={styles.legalText}>Total dispositivo: {formatBytes(networkSnapshot.traffic.deviceTxBytes)}</Text></View><View style={styles.trafficDivider} /><View style={{ flex: 1 }}><Text style={styles.smallCaps}>RX · DESCARGA</Text><Text style={styles.proxyHost}>{networkSnapshot.traffic.deviceRxBytes < 0 ? "N/D" : `${formatBytes(networkTrafficRate.rx)}/s`}</Text><Text style={styles.legalText}>Total dispositivo: {formatBytes(networkSnapshot.traffic.deviceRxBytes)}</Text></View></View><Text style={styles.legalText}>UID NetADB desde el arranque · TX {formatBytes(networkSnapshot.traffic.netadbTxBytes)} · RX {formatBytes(networkSnapshot.traffic.netadbRxBytes)}. El total incluye interfaces visibles y puede contar interfaces virtuales/VPN; no es tráfico por red individual.</Text></View>
+                <Text style={styles.legalText}>Actualizado {new Date(networkSnapshot.capturedAt).toLocaleTimeString()}</Text>
+                {networkSnapshot.networks.length === 0 ? <Text style={styles.emptyText}>Android no informa redes disponibles.</Text> : networkSnapshot.networks.map((network, index) => <View key={`${network.label}-${index}`} style={styles.networkCard}>
+                  <View style={styles.cardTopline}><Text style={styles.panelHeading}>{network.active ? "●  RED PREDETERMINADA" : `RED DISPONIBLE ${index + 1}`}</Text>{network.captivePortal ? <Text style={styles.networkBadgeWarning}>PORTAL CAUTIVO</Text> : null}</View>
+                  <Text style={styles.smallCaps}>TRANSPORTES</Text>
+                  <View style={styles.networkPills}>{network.transports.length ? network.transports.map((transport) => <Text key={transport} style={[styles.networkBadge, transport === "VPN" && styles.networkBadgeVpn]}>{transport}</Text>) : <Text style={styles.emptyText}>Transporte no identificado</Text>}</View>
+                  <Text style={styles.smallCaps}>PROXY HTTP CONFIGURADO</Text>
+                  {network.httpProxy ? <View style={styles.proxyBox}><Text style={styles.proxyHost}>{network.httpProxy.pac || `${network.httpProxy.host}:${network.httpProxy.port}`}</Text>{network.httpProxy.exclusionList.length ? <Text style={styles.legalText}>Exclusiones: {network.httpProxy.exclusionList.join(", ")}</Text> : null}</View> : <Text style={styles.panelCopy}>Android no reporta proxy HTTP explícito. Esto no excluye VPN, DNS privado, proxy de una app ni NAT del router.</Text>}
+                  <View style={styles.capabilityGrid}>{network.capabilities.map((capability) => <View key={capability.key} style={styles.capabilityRow}><View style={[styles.capabilityMark, capability.present ? styles.capabilityPresent : styles.capabilityAbsent]} /><Text style={styles.capabilityLabel}>{capability.label}</Text><Text style={[styles.capabilityValue, capability.present ? { color: C.green } : { color: C.muted }]}>{capability.present ? "SÍ" : "NO"}</Text></View>)}</View>
+                  {network.internet && !network.validated ? <Text style={styles.noticeWarningText}>Red configurada para Internet pero no validada; puede requerir portal cautivo o no tener acceso público ahora.</Text> : null}
+                </View>)}
+              </> : <Text style={styles.emptyText}>Consultando las redes Android…</Text>}
+              {cellularType ? <View style={styles.networkCard}><Text style={styles.panelHeading}>TIPO DE RADIO CELULAR</Text><Text style={[styles.statusHeadline, cellularType.networkType.includes("5G") && { color: C.green }]}>{cellularType.networkType}</Text><Text style={styles.panelCopy}>{cellularType.note}</Text></View> : null}
+              <View style={styles.networkCard}><Text style={styles.panelHeading}>DNS · LOGCAT Y CAPTURAS</Text><Text style={styles.panelCopy}>Los snapshots pueden incluir dumpsys dnsresolver y Logcat clasifica eventos DNS expuestos por Android.</Text>{logs.filter((entry) => entry.event?.label === "DNS").slice(0, 8).map((entry, index) => <Text key={`${entry.at}-${index}`} selectable style={styles.consoleText}>{entry.at.slice(11, 19)}Z · {entry.line}</Text>)}{!logs.some((entry) => entry.event?.label === "DNS") ? <Text style={styles.legalText}>Sin eventos DNS visibles. La ausencia de líneas no demuestra ausencia de consultas.</Text> : null}<Text style={styles.legalText}>Android no garantiza que Logcat exponga cada consulta por app. DNS cifrado, cachés y restricciones del fabricante pueden ocultar nombres. La VPN NetADB observa destinos y contadores de metadatos; no captura ni descifra payload.</Text></View>
+              <View style={styles.noticeWarning}><Text style={styles.noticeMarkWarning}>!</Text><Text style={styles.noticeText}>El transporte no demuestra alcance global ni conexiones entrantes. Wi‑Fi/Ethernet pueden estar tras NAT o reglas del router; muchas redes celulares usan CGNAT. ConnectivityManager no revela el filtrado del operador/router. Bluetooth, Wi‑Fi Aware y LoWPAN tampoco se marcan automáticamente como sin Internet: revisa INTERNET y VALIDATED.</Text></View>
+              <Text style={styles.legalText}>La consulta LTE/NR y TelephonyDisplayInfo pide READ_PHONE_STATE al solicitarla. 5G NSA puede reportarse como LTE; la información de mmWave depende del dispositivo y operador. NOT_ROAMING ausente no prueba por sí solo roaming.</Text>
+            </View>
+          </View>
+          <View style={styles.section}>
+            <SectionTitle index="03" title="Captura del sistema" note="Snapshots UTC de conectividad y redes" />
             <View style={styles.panel}>
               <View style={styles.twoColumns}><View style={{ flex: 1 }}><Field label="INTERVALO · SEGUNDOS" value={intervalText} onChangeText={setIntervalText} placeholder="30" keyboardType="numeric" /></View><View style={{ flex: 1 }}><Field label="DURACIÓN · 0 = MANUAL" value={durationText} onChangeText={setDurationText} placeholder="1800" keyboardType="numeric" /></View></View>
               <View style={styles.switchRow}><View style={{ flex: 1 }}><Text style={styles.switchTitle}>Incluir telephony.registry</Text><Text style={styles.switchCopy}>Puede revelar datos de SIM y celdas.</Text></View><Switch value={includeTelephony} onValueChange={setIncludeTelephony} trackColor={{ false: "#405046", true: "#3e8f48" }} thumbColor={includeTelephony ? C.green : "#a8b7ac"} /></View>
@@ -321,7 +414,7 @@ export default function HomeScreen() {
             </View>
           </View>
           <View style={styles.section}>
-            <SectionTitle index="03" title="Logcat en vivo" note="main · system · events · radio · crash" />
+            <SectionTitle index="04" title="Logcat en vivo" note="main · system · events · radio · crash" />
             <View style={styles.panel}>
               <View style={styles.buttonRow}><View style={{ flex: 1 }}><Action title={logcatActive ? "DETENER LOGCAT" : "INICIAR LOGCAT"} onPress={toggleLogcat} disabled={!serial} secondary={logcatActive} /></View><Text style={[styles.smallCaps, { alignSelf: "center" }]}>{logcatActive ? "STREAM ACTIVO" : "STREAM INACTIVO"}</Text></View>
               {logcatPath ? <Action title="COMPARTIR LOGCAT COMPLETO .TXT" onPress={() => void shareLogcat()} secondary /> : null}
@@ -329,7 +422,7 @@ export default function HomeScreen() {
             </View>
           </View>
           <View style={styles.section}>
-            <SectionTitle index="04" title="Conntrack del router" note="Análisis local de texto aportado por ti" />
+            <SectionTitle index="05" title="Conntrack del router" note="Análisis local de texto aportado por ti" />
             <View style={styles.panel}>
               <Text style={styles.panelCopy}>Pega un registro de conntrack actualizado. No se leen archivos del router automáticamente.</Text>
               <Field label="IP LOCAL ACTUAL DEL TELÉFONO" value={phoneIp} onChangeText={setPhoneIp} placeholder="192.168.1.44" />
@@ -340,7 +433,7 @@ export default function HomeScreen() {
             </View>
           </View>
           <View style={styles.section}>
-            <SectionTitle index="05" title="Paquete de evidencia" note="Exportación bajo demanda · datos locales" />
+            <SectionTitle index="06" title="Paquete de evidencia" note="Exportación bajo demanda · datos locales" />
             <View style={styles.panel}>
               <Text style={styles.panelCopy}>Incluye snapshots, eventos visibles, candidatos conntrack y marcas UTC. Revisa el contenido antes de compartirlo.</Text>
               <View style={styles.buttonRow}><View style={{ flex: 1 }}><Action title="COMPARTIR SESIÓN" onPress={() => void exportSession()} secondary /></View><View style={{ flex: 0.82 }}><Action title="BUGREPORT" onPress={createBugreport} disabled={!serial || busy} secondary /></View></View>
@@ -360,6 +453,8 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
+  trafficReadout: { backgroundColor: "#101713", borderColor: C.border, borderWidth: 1, borderRadius: 12, padding: 12, gap: 10 }, trafficPair: { flexDirection: "row", alignItems: "center", gap: 12 }, trafficDivider: { width: 1, alignSelf: "stretch", backgroundColor: C.border },
+  dashboardGrid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", gap: 10 }, dashboardCell: { width: "48.5%" }, dashboardTile: { minHeight: 126, position: "relative", padding: 13, gap: 7, backgroundColor: C.panel, borderColor: C.border, borderWidth: 1, borderRadius: 15 }, dashboardIcon: { color: C.green, fontSize: 25, fontWeight: "800" }, dashboardTitle: { color: C.text, fontSize: 13, fontWeight: "700" }, dashboardCopy: { color: C.muted, fontSize: 10, lineHeight: 14, paddingRight: 10 }, dashboardArrow: { position: "absolute", right: 13, bottom: 8, color: C.green, fontSize: 24, fontWeight: "300" },
   safe: { flex: 1, backgroundColor: C.bg }, page: { paddingHorizontal: 18, paddingTop: 15, paddingBottom: 120, gap: 21, maxWidth: 720, width: "100%", alignSelf: "center" },
   header: { flexDirection: "row", alignItems: "center", gap: 12, paddingBottom: 3 }, brandMark: { width: 42, height: 42, borderRadius: 13, backgroundColor: "#203222", borderWidth: 1, borderColor: "#527f4e", alignItems: "center", justifyContent: "center" }, brandGlyph: { color: C.green, fontSize: 25, fontWeight: "800", fontFamily: "monospace" }, eyebrow: { color: C.muted, fontFamily: "monospace", fontSize: 9, letterSpacing: 1.4 }, brandTitle: { color: C.text, fontSize: 20, fontWeight: "800" }, livePill: { flexDirection: "row", alignItems: "center", borderColor: C.border, borderWidth: 1, borderRadius: 99, paddingHorizontal: 9, paddingVertical: 7, gap: 6 }, livePillActive: { borderColor: "#4d9444" }, dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.amber }, liveText: { color: C.muted, fontSize: 9, fontFamily: "monospace", letterSpacing: 0.7 },
   hero: { paddingTop: 10, paddingBottom: 4, gap: 9 }, heroKicker: { color: C.green, fontFamily: "monospace", letterSpacing: 1.3, fontSize: 10, fontWeight: "700" }, heroTitle: { color: C.text, fontSize: 30, fontWeight: "800", lineHeight: 36, letterSpacing: -0.8 }, heroBody: { color: C.muted, fontSize: 13, lineHeight: 20, maxWidth: 540 }, statusCard: { borderColor: C.border, borderWidth: 1, backgroundColor: C.panel, borderRadius: 16, padding: 16 }, cardTopline: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, cardLabel: { color: C.muted, fontFamily: "monospace", fontSize: 9, letterSpacing: 1.1 }, statusDot: { height: 8, width: 8, borderRadius: 5 }, statusHeadline: { color: C.text, fontSize: 19, fontWeight: "700", marginTop: 12 }, statusBody: { color: C.muted, fontSize: 12, marginTop: 5, lineHeight: 18 },
@@ -367,5 +462,6 @@ const styles = StyleSheet.create({
   fieldWrap: { gap: 6 }, fieldLabel: { color: C.muted, fontSize: 9, fontFamily: "monospace", letterSpacing: 0.65, fontWeight: "600" }, input: { minHeight: 44, borderWidth: 1, borderColor: C.border, backgroundColor: "#101713", borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, color: C.text, fontFamily: "monospace", fontSize: 12 }, multiline: { minHeight: 102, maxHeight: 190 }, twoColumns: { flexDirection: "row", gap: 10 }, buttonRow: { flexDirection: "row", gap: 9, alignItems: "center" }, action: { minHeight: 45, borderRadius: 10, paddingHorizontal: 12, alignItems: "center", justifyContent: "center", backgroundColor: C.green }, actionSecondary: { backgroundColor: "#203126", borderWidth: 1, borderColor: "#426947" }, actionDanger: { borderColor: "#704448", backgroundColor: "#2c2021" }, actionDisabled: { opacity: 0.42 }, actionText: { color: "#102013", fontSize: 10, fontWeight: "800", fontFamily: "monospace", letterSpacing: 0.5, textAlign: "center" }, actionTextSecondary: { color: C.green },
   notice: { flexDirection: "row", backgroundColor: "#16231b", borderRadius: 10, padding: 10, gap: 8, alignItems: "flex-start" }, noticeMark: { color: C.cyan, fontFamily: "monospace", fontWeight: "900" }, noticeText: { color: "#b1c1b5", fontSize: 10, lineHeight: 15, flex: 1 }, noticeWarning: { flexDirection: "row", backgroundColor: "#2c2518", borderRadius: 10, padding: 10, gap: 8, alignItems: "flex-start" }, noticeMarkWarning: { color: C.amber, fontFamily: "monospace", fontWeight: "900" }, consoleText: { color: C.cyan, fontSize: 10, lineHeight: 15, fontFamily: "monospace", paddingTop: 4 }, switchRow: { flexDirection: "row", alignItems: "center", paddingVertical: 4, gap: 10 }, switchTitle: { color: C.text, fontSize: 12, fontWeight: "600" }, switchCopy: { color: C.muted, fontSize: 10, marginTop: 3 }, metricsRow: { flexDirection: "row", borderTopColor: C.border, borderTopWidth: 1, paddingTop: 12, gap: 6 }, metric: { flex: 1, alignItems: "center", gap: 3 }, metricValue: { color: C.green, fontFamily: "monospace", fontSize: 16, fontWeight: "700" }, metricLabel: { color: C.muted, fontFamily: "monospace", fontSize: 8, letterSpacing: 0.8 }, smallCaps: { color: C.muted, fontFamily: "monospace", fontSize: 8, letterSpacing: 0.7 }, emptyText: { color: C.muted, fontSize: 11, lineHeight: 16, paddingVertical: 8 },
   logRow: { flexDirection: "row", gap: 9, paddingVertical: 10, borderTopColor: C.border, borderTopWidth: StyleSheet.hairlineWidth }, logAccent: { width: 2, borderRadius: 2 }, logMeta: { flexDirection: "row", gap: 9, alignItems: "center" }, logTime: { color: C.muted, fontSize: 9, fontFamily: "monospace" }, logType: { fontSize: 9, fontWeight: "800", fontFamily: "monospace", letterSpacing: 0.4 }, logDetail: { color: C.text, fontSize: 11, lineHeight: 16, marginTop: 4 }, rawLine: { color: "#7e9283", fontSize: 9, lineHeight: 14, fontFamily: "monospace", marginTop: 5 }, candidate: { color: C.amber, fontFamily: "monospace", fontSize: 10, lineHeight: 16, paddingVertical: 5 }, legalText: { color: "#748278", fontSize: 9, lineHeight: 14 }, legalLink: { paddingVertical: 5 }, legalLinkText: { color: C.green, fontSize: 10, fontWeight: "700" }, devicePicker: { gap: 6 }, deviceOption: { borderWidth: 1, borderColor: C.border, borderRadius: 8, padding: 10 }, deviceOptionSelected: { borderColor: C.green, backgroundColor: "#203126" }, deviceOptionText: { color: C.text, fontFamily: "monospace", fontSize: 11 }, footer: { color: "#536157", fontSize: 8, fontFamily: "monospace", letterSpacing: 1.3, textAlign: "center", paddingVertical: 5 },
+  networkCard: { gap: 9, padding: 12, borderWidth: 1, borderColor: C.border, borderRadius: 12, backgroundColor: "#101713" }, networkPills: { flexDirection: "row", flexWrap: "wrap", gap: 6 }, networkBadge: { overflow: "hidden", color: C.green, borderColor: "#426947", borderWidth: 1, borderRadius: 99, paddingHorizontal: 9, paddingVertical: 5, fontSize: 8, fontWeight: "800", fontFamily: "monospace" }, networkBadgeVpn: { color: C.cyan, borderColor: "#3c6970" }, networkBadgeWarning: { color: C.amber, borderColor: C.amber, borderWidth: 1, borderRadius: 99, paddingHorizontal: 8, paddingVertical: 4, fontSize: 8, fontFamily: "monospace" }, proxyBox: { backgroundColor: C.panel2, borderRadius: 9, padding: 9, gap: 4 }, proxyHost: { color: C.green, fontFamily: "monospace", fontSize: 11, fontWeight: "700" }, capabilityGrid: { flexDirection: "row", flexWrap: "wrap", gap: 6 }, capabilityRow: { minWidth: "47%", flexGrow: 1, flexDirection: "row", alignItems: "center", gap: 6, borderTopWidth: StyleSheet.hairlineWidth, borderColor: C.border, paddingVertical: 6 }, capabilityMark: { width: 6, height: 6, borderRadius: 3 }, capabilityPresent: { backgroundColor: C.green }, capabilityAbsent: { backgroundColor: "#58665d" }, capabilityLabel: { flex: 1, color: C.muted, fontSize: 8, fontFamily: "monospace" }, capabilityValue: { fontSize: 8, fontWeight: "800", fontFamily: "monospace" }, noticeWarningText: { color: C.amber, backgroundColor: "#2c2518", borderRadius: 8, padding: 9, fontSize: 10, lineHeight: 15 },
   compareBlock: { gap: 9, borderTopColor: C.border, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 12 }, compareChips: { flexDirection: "row", gap: 7, paddingVertical: 2 }, compareChip: { borderWidth: 1, borderColor: C.border, borderRadius: 99, paddingHorizontal: 9, paddingVertical: 7, backgroundColor: "#101713" }, compareChipSelected: { borderColor: "#4d9444", backgroundColor: "#203126" }, compareChipText: { color: C.muted, fontSize: 8, fontFamily: "monospace" }, diffSource: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.border, paddingTop: 8, gap: 3 }, diffSourceTitle: { color: C.text, fontFamily: "monospace", fontSize: 10, fontWeight: "700" }, diffCategories: { color: C.cyan, fontSize: 9, fontFamily: "monospace", lineHeight: 14 },
 });

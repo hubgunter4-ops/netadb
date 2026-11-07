@@ -98,7 +98,7 @@ const config: ExpoConfig & { logoUrl: string } = {
     },
     predictiveBackGestureEnabled: false,
     package: env.androidPackage,
-    permissions: ["INTERNET", "ACCESS_NETWORK_STATE", "QUERY_ALL_PACKAGES", "PACKAGE_USAGE_STATS", "POST_NOTIFICATIONS", "FOREGROUND_SERVICE", "FOREGROUND_SERVICE_SPECIAL_USE"],
+    permissions: ["INTERNET", "ACCESS_NETWORK_STATE", "QUERY_ALL_PACKAGES", "PACKAGE_USAGE_STATS", "POST_NOTIFICATIONS", "READ_PHONE_STATE", "FOREGROUND_SERVICE", "FOREGROUND_SERVICE_SPECIAL_USE"],
     intentFilters: [
       {
         action: "VIEW",

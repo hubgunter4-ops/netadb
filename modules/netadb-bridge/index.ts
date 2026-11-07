@@ -12,6 +12,12 @@ export type ShellState = { serial: string; state: "ready" | "closed" | "error"; 
 export type VpnAppTarget = { packageName: string; label: string; systemApp: boolean };
 export type VpnConnection = { protocol: "tcp" | "udp"; endpoint: string; domain: string | null; firstSeen: number; lastSeen: number; events: number; bytes: number; openObserved: boolean };
 export type VpnCaptureStatus = { permissionGranted: boolean; otherVpnActive: boolean; running: boolean; state: "idle" | "starting" | "running" | "error"; packageName: string; message: string; txPackets: number; txBytes: number; rxPackets: number; rxBytes: number; connections: VpnConnection[] };
+export type NetworkCapability = { key: string; label: string; present: boolean };
+export type NetworkHttpProxy = { host: string; port: number; exclusionList: string[]; pac: string } | null;
+export type NetworkDetail = { label: string; active: boolean; transports: string[]; capabilities: NetworkCapability[]; internet: boolean; validated: boolean; notMetered: boolean; notRoaming: boolean; notVpn: boolean; captivePortal: boolean; cellular: boolean; vpn: boolean; httpProxy: NetworkHttpProxy };
+export type NetworkTrafficStats = { deviceTxBytes: number; deviceRxBytes: number; netadbTxBytes: number; netadbRxBytes: number };
+export type NetworkSnapshot = { capturedAt: number; apiLevel: number; hasActiveNetwork: boolean; networkCount: number; networks: NetworkDetail[]; traffic: NetworkTrafficStats };
+export type CellularNetworkType = { available: boolean; networkType: string; note: string };
 export type NetadbNativeModule = {
   isAvailable(): Promise<BridgeStatus>;
   startDiagnosticsSession(serial: string, status: string): Promise<boolean>;
@@ -32,6 +38,8 @@ export type NetadbNativeModule = {
   shareFile(path: string, mimeType: "application/json" | "application/zip" | "text/plain" | "text/csv"): Promise<boolean>;
   deleteDiagnosticFiles(): Promise<{ filesDeleted: number; bytesDeleted: number }>;
   getLicenses(): Promise<{ ladb: string; adb: string; shizuku: string; vpn: string }>;
+  getNetworkSnapshot(): Promise<NetworkSnapshot>;
+  getCellularNetworkType(): Promise<CellularNetworkType>;
   getVpnCaptureStatus(): Promise<VpnCaptureStatus>;
   listVpnTargets(): Promise<VpnAppTarget[]>;
   requestVpnConsent(): Promise<{ permissionGranted: boolean; promptLaunched: boolean }>;

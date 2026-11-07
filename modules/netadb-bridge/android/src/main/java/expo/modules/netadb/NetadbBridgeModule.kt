@@ -76,6 +76,18 @@ class NetadbBridgeModule : Module() {
       )
     }
 
+    AsyncFunction("getNetworkSnapshot") {
+      val context = appContext.reactContext?.applicationContext
+        ?: throw IllegalStateException("Contexto Android no disponible")
+      NetadbNetworkInspector.snapshot(context)
+    }
+
+    AsyncFunction("getCellularNetworkType") {
+      val context = appContext.reactContext?.applicationContext
+        ?: throw IllegalStateException("Contexto Android no disponible")
+      NetadbNetworkInspector.cellularType(context)
+    }
+
     AsyncFunction("openStandardUsageAccessSettings") {
       val context = appContext.reactContext?.applicationContext
         ?: throw IllegalStateException("Contexto Android no disponible")

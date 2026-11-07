@@ -7,6 +7,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   useWindowDimensions,
@@ -108,6 +109,7 @@ export default function VpnScreen() {
   const [status, setStatus] = useState<VpnCaptureStatus | null>(null);
   const [targets, setTargets] = useState<VpnAppTarget[]>([]);
   const [selected, setSelected] = useState("");
+  const [showAppPicker, setShowAppPicker] = useState(false);
   const [query, setQuery] = useState("");
   const [trafficQuery, setTrafficQuery] = useState("");
   const [busy, setBusy] = useState(false);
@@ -116,24 +118,36 @@ export default function VpnScreen() {
   const [trafficSamples, setTrafficSamples] = useState<TrafficSample[]>([]);
   const pulse = useMemo(() => new Animated.Value(1), []);
   const refreshInFlight = useRef(false);
-  const lastTraffic = useRef<{ tx: number; rx: number } | null>(null);
+  const lastTraffic = useRef<{ tx: number; rx: number; at: number } | null>(
+    null,
+  );
 
   const applyStatus = useCallback((next: VpnCaptureStatus) => {
     setStatus(next);
     if (next.running) {
       const previous = lastTraffic.current;
+      const capturedAt = Date.now();
       if (previous) {
+        const elapsed = Math.max(1, capturedAt - previous.at);
         setTrafficSamples((items) =>
           [
             ...items,
             {
-              tx: Math.max(0, next.txBytes - previous.tx),
-              rx: Math.max(0, next.rxBytes - previous.rx),
+              tx: Math.round(
+                (Math.max(0, next.txBytes - previous.tx) * 1000) / elapsed,
+              ),
+              rx: Math.round(
+                (Math.max(0, next.rxBytes - previous.rx) * 1000) / elapsed,
+              ),
             },
           ].slice(-32),
         );
       }
-      lastTraffic.current = { tx: next.txBytes, rx: next.rxBytes };
+      lastTraffic.current = {
+        tx: next.txBytes,
+        rx: next.rxBytes,
+        at: capturedAt,
+      };
       if (next.packageName) setSelected(next.packageName);
     } else {
       lastTraffic.current = null;
@@ -268,6 +282,10 @@ export default function VpnScreen() {
     ],
     [status?.connections],
   );
+  const selectedTarget = useMemo(
+    () => targets.find((item) => item.packageName === selected) ?? null,
+    [selected, targets],
+  );
 
   const authorize = async () => {
     if (!NetadbBridge) return;
@@ -346,6 +364,25 @@ export default function VpnScreen() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const toggleVpn = (enabled: boolean) => {
+    if (!enabled) {
+      void stop();
+      return;
+    }
+    if (!status?.permissionGranted) {
+      void authorize();
+      return;
+    }
+    if (!selected) {
+      setShowAppPicker(true);
+      setMessage(
+        "Selecciona una app objetivo. La VPN no depende del shell ADB.",
+      );
+      return;
+    }
+    void start();
   };
 
   const exportLog = async (format: "json" | "csv") => {
@@ -430,6 +467,10 @@ export default function VpnScreen() {
     1,
     ...trafficSamples.flatMap((sample) => [sample.tx, sample.rx]),
   );
+  const currentTraffic = trafficSamples[trafficSamples.length - 1] ?? {
+    tx: 0,
+    rx: 0,
+  };
   const listHeight = Math.min(320, Math.max(120, windowHeight * 0.36));
   const stateLabel = status?.running
     ? "ACTIVA"
@@ -457,8 +498,8 @@ export default function VpnScreen() {
           <Text style={styles.eyebrow}>NETADB / HERRAMIENTA VPN</Text>
           <Text style={styles.title}>VPN</Text>
           <Text style={styles.body}>
-            Filtrado y monitoreo local del tráfico de una aplicación. Solo
-            metadata; no se descifra TLS ni se guarda payload.
+            Túnel VPN local de Android para una app elegida, independiente del
+            shell ADB. No es un servidor VPN remoto ni descifra TLS.
           </Text>
         </AnimatedEntry>
 
@@ -483,6 +524,14 @@ export default function VpnScreen() {
               {status?.running ? (
                 <Animated.View style={[styles.liveDot, { opacity: pulse }]} />
               ) : null}
+              <Switch
+                accessibilityLabel="Activar o detener la VPN local"
+                value={Boolean(status?.running || status?.state === "starting")}
+                onValueChange={toggleVpn}
+                disabled={busy || !NetadbBridge}
+                trackColor={{ false: "#405046", true: "#3e8f48" }}
+                thumbColor={status?.running ? C.green : "#a8b7ac"}
+              />
             </View>
             <Text style={styles.cardBody}>
               {status?.message ??
@@ -522,78 +571,116 @@ export default function VpnScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.cardTitle}>APLICACIÓN SELECCIONADA</Text>
                 <Text style={styles.cardBody}>
-                  Cargar y filtrar el inventario completo del teléfono.
+                  Selección VPN independiente de ADB.
                 </Text>
               </View>
               <Button
-                label={loadingTargets ? "CARGANDO…" : "CARGAR APPS"}
-                onPress={() => void loadTargets()}
+                label={
+                  selected
+                    ? "CAMBIAR"
+                    : loadingTargets
+                      ? "CARGANDO…"
+                      : "CARGAR APPS"
+                }
+                onPress={() =>
+                  selected
+                    ? setShowAppPicker((visible) => !visible)
+                    : void loadTargets()
+                }
                 disabled={loadingTargets || !NetadbBridge}
                 secondary
               />
             </View>
-            <TextInput
-              value={query}
-              onChangeText={setQuery}
-              placeholder="Buscar aplicación o paquete…"
-              placeholderTextColor={C.muted}
-              style={styles.input}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            <ScrollView
-              style={[styles.list, { height: listHeight }]}
-              contentContainerStyle={styles.listContent}
-              nestedScrollEnabled
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator
-            >
-              {filteredTargets.map((item) => (
-                <Pressable
-                  key={item.packageName}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Seleccionar ${item.label}`}
-                  onPress={() => setSelected(item.packageName)}
-                  style={[
-                    styles.appRow,
-                    selected === item.packageName && styles.appRowSelected,
-                  ]}
-                >
-                  <View
-                    style={[
-                      styles.appGlyph,
-                      item.systemApp && styles.appGlyphSystem,
-                    ]}
-                  >
-                    <Text style={styles.appGlyphText}>
-                      {item.label.trim().slice(0, 1).toUpperCase() || "A"}
-                    </Text>
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.appTitle} numberOfLines={1}>
-                      {item.label}
-                    </Text>
-                    <Text style={styles.appPackage} numberOfLines={1}>
-                      {item.packageName}
-                    </Text>
-                  </View>
-                  <Text style={styles.appKind}>
-                    {item.systemApp ? "SISTEMA" : "USUARIO"}
+            {selected && !showAppPicker ? (
+              <View style={styles.selectedAppCard}>
+                <View style={styles.appGlyph}>
+                  <Text style={styles.appGlyphText}>
+                    {selectedTarget?.label.trim().slice(0, 1).toUpperCase() ||
+                      "A"}
                   </Text>
-                </Pressable>
-              ))}
-              {targets.length > 0 && filteredTargets.length === 0 ? (
-                <Text style={styles.empty}>
-                  No hay aplicaciones que coincidan con el filtro.
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.appTitle} numberOfLines={1}>
+                    {selectedTarget?.label ?? "Aplicación seleccionada"}
+                  </Text>
+                  <Text style={styles.appPackage} numberOfLines={1}>
+                    {selected}
+                  </Text>
+                </View>
+                <Text style={styles.appKind}>
+                  {selectedTarget?.systemApp ? "SISTEMA" : "USUARIO"}
                 </Text>
-              ) : null}
-              {targets.length === 0 && !loadingTargets ? (
-                <Text style={styles.empty}>
-                  No se cargó el inventario. Pulsa “CARGAR APPS” para
-                  reintentar.
-                </Text>
-              ) : null}
-            </ScrollView>
+              </View>
+            ) : null}
+            {showAppPicker || !selected ? (
+              <>
+                <TextInput
+                  value={query}
+                  onChangeText={setQuery}
+                  placeholder="Buscar aplicación o paquete…"
+                  placeholderTextColor={C.muted}
+                  style={styles.input}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <ScrollView
+                  style={[styles.list, { height: listHeight }]}
+                  contentContainerStyle={styles.listContent}
+                  nestedScrollEnabled
+                  keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator
+                >
+                  {filteredTargets.map((item) => (
+                    <Pressable
+                      key={item.packageName}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Seleccionar ${item.label}`}
+                      onPress={() => {
+                        setSelected(item.packageName);
+                        setShowAppPicker(false);
+                      }}
+                      style={[
+                        styles.appRow,
+                        selected === item.packageName && styles.appRowSelected,
+                      ]}
+                    >
+                      <View
+                        style={[
+                          styles.appGlyph,
+                          item.systemApp && styles.appGlyphSystem,
+                        ]}
+                      >
+                        <Text style={styles.appGlyphText}>
+                          {item.label.trim().slice(0, 1).toUpperCase() || "A"}
+                        </Text>
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.appTitle} numberOfLines={1}>
+                          {item.label}
+                        </Text>
+                        <Text style={styles.appPackage} numberOfLines={1}>
+                          {item.packageName}
+                        </Text>
+                      </View>
+                      <Text style={styles.appKind}>
+                        {item.systemApp ? "SISTEMA" : "USUARIO"}
+                      </Text>
+                    </Pressable>
+                  ))}
+                  {targets.length > 0 && filteredTargets.length === 0 ? (
+                    <Text style={styles.empty}>
+                      No hay aplicaciones que coincidan con el filtro.
+                    </Text>
+                  ) : null}
+                  {targets.length === 0 && !loadingTargets ? (
+                    <Text style={styles.empty}>
+                      No se cargó el inventario. Pulsa “CARGAR APPS” para
+                      reintentar.
+                    </Text>
+                  ) : null}
+                </ScrollView>
+              </>
+            ) : null}
             <Text style={styles.cardBody}>
               {targets.length
                 ? `${filteredTargets.length} de ${targets.length} apps · lista desplazable`
@@ -646,20 +733,22 @@ export default function VpnScreen() {
                 <View style={styles.trafficMetric}>
                   <Text style={styles.cardBody}>TX · SUBIDA</Text>
                   <Text style={styles.trafficValue}>
-                    {formatBytes(status.txBytes)}
+                    {formatBytes(currentTraffic.tx)}/s
                   </Text>
                   <Text style={styles.cardBody}>
-                    {status.txPackets} paquetes
+                    TOTAL {formatBytes(status.txBytes)} · {status.txPackets}{" "}
+                    paquetes
                   </Text>
                 </View>
                 <View style={styles.metricDivider} />
                 <View style={styles.trafficMetric}>
                   <Text style={styles.cardBody}>RX · DESCARGA</Text>
                   <Text style={styles.trafficValue}>
-                    {formatBytes(status.rxBytes)}
+                    {formatBytes(currentTraffic.rx)}/s
                   </Text>
                   <Text style={styles.cardBody}>
-                    {status.rxPackets} paquetes
+                    TOTAL {formatBytes(status.rxBytes)} · {status.rxPackets}{" "}
+                    paquetes
                   </Text>
                 </View>
               </View>
@@ -851,6 +940,16 @@ const styles = StyleSheet.create({
     backgroundColor: "#101713",
   },
   listContent: { padding: 7, gap: 5 },
+  selectedAppCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    padding: 11,
+    borderWidth: 1,
+    borderColor: "#426947",
+    borderRadius: 12,
+    backgroundColor: "#203126",
+  },
   appRow: {
     flexDirection: "row",
     alignItems: "center",
