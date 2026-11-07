@@ -1,4 +1,4 @@
-name: Expo EAS Android Build
+name: Android APK (GitHub runner)
 
 on:
   push:
@@ -16,13 +16,14 @@ on:
 
 jobs:
   build-android:
-    name: Build Android APK
+    name: Build Android APK locally
     runs-on: ubuntu-latest
     env:
       EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      EAS_LOCAL_BUILD_ARTIFACTS_DIR: ${{ github.workspace }}/artifacts
     steps:
       - name: Require Expo token
-        run: test -n "$EXPO_TOKEN" || (echo "Configure the EXPO_TOKEN repository secret first." && exit 1)
+        run: test -n "$EXPO_TOKEN" || (echo "Configure the EXPO_TOKEN repository secret for EAS authentication and credentials." && exit 1)
 
       - name: Checkout
         uses: actions/checkout@v5
@@ -38,6 +39,12 @@ jobs:
           node-version: 24
           cache: pnpm
 
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
       - name: Setup Expo and EAS
         uses: expo/expo-github-action@v8
         with:
@@ -47,5 +54,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build Android production APK
-        run: eas build --platform android --profile production-apk --non-interactive --no-wait
+      - name: Build Android production APK on this runner
+        run: eas build --platform android --profile production-apk --local --non-interactive
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: netadb-android-apk
+          path: ${{ github.workspace }}/artifacts/*.apk
+          if-no-files-found: error
+          retention-days: 7
