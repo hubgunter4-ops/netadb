@@ -64,7 +64,16 @@ const config: ExpoConfig & { logoUrl: string } = {
   name: env.appName,
   slug: env.appSlug,
   version: "1.0.0",
-  extra: publicRuntime,
+  runtimeVersion: { policy: "appVersion" },
+  updates: {
+    url: "https://u.expo.dev/30c1641a-11cb-4912-8fcf-b1f7700892b6",
+  },
+  extra: {
+    ...publicRuntime,
+    eas: {
+      projectId: "30c1641a-11cb-4912-8fcf-b1f7700892b6",
+    },
+  },
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: env.scheme,

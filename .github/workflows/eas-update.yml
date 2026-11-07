@@ -1,0 +1,54 @@
+name: Expo EAS Update
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "app/**"
+      - "components/**"
+      - "constants/**"
+      - "hooks/**"
+      - "lib/**"
+      - "shared/**"
+      - "global.css"
+      - "assets/**"
+  workflow_dispatch:
+
+jobs:
+  publish-update:
+    name: Publish JavaScript update
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+    steps:
+      - name: Require Expo token
+        run: test -n "$EXPO_TOKEN" || (echo "Configure the EXPO_TOKEN repository secret first." && exit 1)
+
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Setup Expo and EAS
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Publish update to preview
+        run: eas update --branch preview --message "main @ ${GITHUB_SHA}" --non-interactive

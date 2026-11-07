@@ -1,0 +1,51 @@
+name: Expo EAS Android Build
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "modules/**"
+      - "app.config.ts"
+      - "eas.json"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "assets/**"
+      - ".github/workflows/eas-build.yml"
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+    steps:
+      - name: Require Expo token
+        run: test -n "$EXPO_TOKEN" || (echo "Configure the EXPO_TOKEN repository secret first." && exit 1)
+
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Setup Expo and EAS
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Android preview APK
+        run: eas build --platform android --profile preview --non-interactive --no-wait
