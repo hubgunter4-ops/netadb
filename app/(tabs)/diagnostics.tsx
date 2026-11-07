@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, KeyboardAvoidingView, PermissionsAndroid, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { Link } from "expo-router";
 import { ScreenContainer } from "@/components/screen-container";
 import { NetadbBridge } from "@/modules/netadb-bridge";
 import type { BridgeStatus } from "@/modules/netadb-bridge";
 import { classifyLogcatLine, parseExternalInboundConntrack, SNAPSHOT_COMMANDS, utcTimestamp, type ClassifiedEvent } from "@/lib/diagnostics/parser";
+import { compareSnapshots } from "@/lib/diagnostics/snapshot-diff";
 
 type Snapshot = { capturedAt: string; files: Record<string, string>; errors: string[] };
 type LogEntry = { at: string; line: string; event: ClassifiedEvent | null };
@@ -36,6 +37,9 @@ export default function HomeScreen() {
   const [includeTelephony, setIncludeTelephony] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
+  const snapshotsRef = useRef<Snapshot[]>([]);
+  const [comparisonBaseId, setComparisonBaseId] = useState("");
+  const [comparisonCurrentId, setComparisonCurrentId] = useState("");
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [logcatActive, setLogcatActive] = useState(false);
   const [logcatPath, setLogcatPath] = useState("");
@@ -137,7 +141,12 @@ export default function HomeScreen() {
         }
       }
       const snapshot = { capturedAt, files, errors };
-      setSnapshots((previous) => [snapshot, ...previous].slice(0, 200));
+      const previousSnapshots = snapshotsRef.current;
+      const nextSnapshots = [snapshot, ...previousSnapshots].slice(0, 200);
+      snapshotsRef.current = nextSnapshots;
+      setSnapshots(nextSnapshots);
+      setComparisonBaseId(previousSnapshots[0]?.capturedAt ?? "");
+      setComparisonCurrentId(capturedAt);
       setLogs((previous) => [{ at: capturedAt, line: `Snapshot listo · ${Object.keys(files).length} fuentes · ${errors.length} avisos`, event: { label: "SNAPSHOT", detail: Object.keys(files).join(" · ") || "Sin resultados", tone: errors.length ? "yellow" : "green" } as const }, ...previous].slice(0, 600));
     } finally { runningCapture.current = false; }
   };
@@ -248,7 +257,8 @@ export default function HomeScreen() {
         filesDeleted = result.filesDeleted;
         bytesDeleted = result.bytesDeleted;
       }
-      setSnapshots([]); setLogs([]); logLineCount.current = 0;
+      snapshotsRef.current = [];
+      setSnapshots([]); setComparisonBaseId(""); setComparisonCurrentId(""); setLogs([]); logLineCount.current = 0;
       setConntrackText(""); setPhoneIp(""); setConntrackResults([]);
       setLogcatPath(""); setReportPath(""); setConnectionMessage(`Se borraron ${filesDeleted} archivos locales (${(bytesDeleted / 1024 / 1024).toFixed(2)} MiB) y el registro de esta sesión.`);
     } catch (error) { setConnectionMessage(`No se pudieron borrar todos los datos locales: ${String(error)}`); }
@@ -266,6 +276,9 @@ export default function HomeScreen() {
     ]);
   };
   const androidReady = Platform.OS === "android" && Boolean(NetadbBridge) && bridgeStatus?.available === true && bridgeStatus.apiLevel >= 30;
+  const comparisonBase = snapshots.find((item) => item.capturedAt === comparisonBaseId);
+  const comparisonCurrent = snapshots.find((item) => item.capturedAt === comparisonCurrentId);
+  const comparison = useMemo(() => comparisonBase && comparisonCurrent ? compareSnapshots(comparisonBase, comparisonCurrent) : null, [comparisonBase, comparisonCurrent]);
 
   return (
     <ScreenContainer containerClassName="bg-[#111814]" safeAreaClassName="bg-[#111814]" style={styles.safe}>
@@ -309,6 +322,32 @@ export default function HomeScreen() {
               <View style={styles.noticeWarning}><Text style={styles.noticeMarkWarning}>!</Text><Text style={styles.noticeText}>Para seguir en segundo plano y con pantalla apagada, NetADB mantiene la CPU despierta mientras la captura o logcat esté activo. Consume batería; detén el registro al terminar.</Text></View>
               <View style={styles.buttonRow}><View style={{ flex: 1 }}><Action title={capturing ? "CAPTURANDO" : "INICIAR SNAPSHOTS"} onPress={() => void startCapture()} disabled={!serial || capturing || busy} /></View><View style={{ flex: 0.75 }}><Action title="DETENER" onPress={stopCapture} disabled={!capturing} secondary danger /></View></View>
               <View style={styles.metricsRow}><Metric value={String(snapshots.length)} label="CAPTURAS" /><Metric value={Object.keys(snapshots[0]?.files ?? {}).length ? String(Object.keys(snapshots[0].files).length) : "—"} label="FUENTES" /><Metric value={String(logs.length)} label="EVENTOS" /></View>
+              <View style={styles.compareBlock}>
+                <Text style={styles.panelHeading}>Comparar capturas</Text>
+                <Text style={styles.panelCopy}>Elige una captura base (A) y otra más reciente (B). Las diferencias se calculan localmente por archivo.</Text>
+                <Text style={styles.smallCaps}>A · CAPTURA BASE</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.compareChips}>
+                  {snapshots.map((item) => <Pressable key={`base-${item.capturedAt}`} onPress={() => setComparisonBaseId(item.capturedAt)} style={[styles.compareChip, comparisonBaseId === item.capturedAt && styles.compareChipSelected]}><Text style={[styles.compareChipText, comparisonBaseId === item.capturedAt && { color: C.green }]}>{item.capturedAt.slice(11, 19)}Z · {item.capturedAt.slice(0, 10)}</Text></Pressable>)}
+                </ScrollView>
+                <Text style={styles.smallCaps}>B · CAPTURA ACTUAL</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.compareChips}>
+                  {snapshots.map((item) => <Pressable key={`current-${item.capturedAt}`} onPress={() => setComparisonCurrentId(item.capturedAt)} style={[styles.compareChip, comparisonCurrentId === item.capturedAt && styles.compareChipSelected]}><Text style={[styles.compareChipText, comparisonCurrentId === item.capturedAt && { color: C.green }]}>{item.capturedAt.slice(11, 19)}Z · {item.capturedAt.slice(0, 10)}</Text></Pressable>)}
+                </ScrollView>
+                {!comparison ? <Text style={styles.emptyText}>Necesitas dos snapshots en memoria para comparar.</Text> : <>
+                  <View style={styles.metricsRow}><Metric value={`+${comparison.addedCount}`} label="AÑADIDAS" /><Metric value={`−${comparison.removedCount}`} label="ELIMINADAS" /><Metric value={String(comparison.changedSources)} label="FUENTES CON CAMBIO" /></View>
+                  {comparison.changedSources === 0 ? <Text style={styles.emptyText}>No se encontraron diferencias textuales en las fuentes seleccionadas.</Text> : comparison.sources.filter((source) => source.addedCount > 0 || source.removedCount > 0 || source.missingFromBase || source.missingFromCurrent).slice(0, 12).map((source) => <View key={source.source} style={styles.diffSource}>
+                    <Text style={styles.diffSourceTitle}>{source.source} · +{source.addedCount} / −{source.removedCount}</Text>
+                    {source.missingFromBase ? <Text style={styles.rawLine}>Fuente solo presente en B.</Text> : null}
+                    {source.missingFromCurrent ? <Text style={styles.rawLine}>Fuente solo presente en A.</Text> : null}
+                    <Text style={styles.diffCategories}>{Object.entries(source.categories).map(([name, count]) => `${name} ${count}`).join(" · ") || "Sin categoría reconocida"}</Text>
+                    {source.added.slice(0, 5).map((item, index) => <Text selectable key={`a-${index}`} style={[styles.rawLine, { color: C.green }]}>+ {item.count > 1 ? `(${item.count}) ` : ""}{item.line}</Text>)}
+                    {source.removed.slice(0, 5).map((item, index) => <Text selectable key={`r-${index}`} style={[styles.rawLine, { color: C.amber }]}>− {item.count > 1 ? `(${item.count}) ` : ""}{item.line}</Text>)}
+                    {source.truncated ? <Text style={styles.legalText}>Fuente extensa: se compararon las primeras 30 000 líneas de cada lado.</Text> : null}
+                  </View>) }
+                  {comparison.baseErrors.length || comparison.currentErrors.length ? <Text style={styles.noticeText}>Avisos capturas A/B: A [{comparison.baseErrors.join("; ") || "ninguno"}] · B [{comparison.currentErrors.join("; ") || "ninguno"}]</Text> : null}
+                  <Text style={styles.legalText}>Comparación textual y heurística; los grupos no prueban causa raíz. No se modifican snapshots ni se envían fuera del teléfono.</Text>
+                </>}
+              </View>
             </View>
           </View>
           <View style={styles.section}>
@@ -357,4 +396,5 @@ const styles = StyleSheet.create({
   fieldWrap: { gap: 6 }, fieldLabel: { color: C.muted, fontSize: 9, fontFamily: "monospace", letterSpacing: 0.65, fontWeight: "600" }, input: { minHeight: 44, borderWidth: 1, borderColor: C.border, backgroundColor: "#101713", borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, color: C.text, fontFamily: "monospace", fontSize: 12 }, multiline: { minHeight: 102, maxHeight: 190 }, twoColumns: { flexDirection: "row", gap: 10 }, buttonRow: { flexDirection: "row", gap: 9, alignItems: "center" }, action: { minHeight: 45, borderRadius: 10, paddingHorizontal: 12, alignItems: "center", justifyContent: "center", backgroundColor: C.green }, actionSecondary: { backgroundColor: "#203126", borderWidth: 1, borderColor: "#426947" }, actionDanger: { borderColor: "#704448", backgroundColor: "#2c2021" }, actionDisabled: { opacity: 0.42 }, actionText: { color: "#102013", fontSize: 10, fontWeight: "800", fontFamily: "monospace", letterSpacing: 0.5, textAlign: "center" }, actionTextSecondary: { color: C.green },
   notice: { flexDirection: "row", backgroundColor: "#16231b", borderRadius: 10, padding: 10, gap: 8, alignItems: "flex-start" }, noticeMark: { color: C.cyan, fontFamily: "monospace", fontWeight: "900" }, noticeText: { color: "#b1c1b5", fontSize: 10, lineHeight: 15, flex: 1 }, noticeWarning: { flexDirection: "row", backgroundColor: "#2c2518", borderRadius: 10, padding: 10, gap: 8, alignItems: "flex-start" }, noticeMarkWarning: { color: C.amber, fontFamily: "monospace", fontWeight: "900" }, consoleText: { color: C.cyan, fontSize: 10, lineHeight: 15, fontFamily: "monospace", paddingTop: 4 }, switchRow: { flexDirection: "row", alignItems: "center", paddingVertical: 4, gap: 10 }, switchTitle: { color: C.text, fontSize: 12, fontWeight: "600" }, switchCopy: { color: C.muted, fontSize: 10, marginTop: 3 }, metricsRow: { flexDirection: "row", borderTopColor: C.border, borderTopWidth: 1, paddingTop: 12, gap: 6 }, metric: { flex: 1, alignItems: "center", gap: 3 }, metricValue: { color: C.green, fontFamily: "monospace", fontSize: 16, fontWeight: "700" }, metricLabel: { color: C.muted, fontFamily: "monospace", fontSize: 8, letterSpacing: 0.8 }, smallCaps: { color: C.muted, fontFamily: "monospace", fontSize: 8, letterSpacing: 0.7 }, emptyText: { color: C.muted, fontSize: 11, lineHeight: 16, paddingVertical: 8 },
   logRow: { flexDirection: "row", gap: 9, paddingVertical: 10, borderTopColor: C.border, borderTopWidth: StyleSheet.hairlineWidth }, logAccent: { width: 2, borderRadius: 2 }, logMeta: { flexDirection: "row", gap: 9, alignItems: "center" }, logTime: { color: C.muted, fontSize: 9, fontFamily: "monospace" }, logType: { fontSize: 9, fontWeight: "800", fontFamily: "monospace", letterSpacing: 0.4 }, logDetail: { color: C.text, fontSize: 11, lineHeight: 16, marginTop: 4 }, rawLine: { color: "#7e9283", fontSize: 9, lineHeight: 14, fontFamily: "monospace", marginTop: 5 }, candidate: { color: C.amber, fontFamily: "monospace", fontSize: 10, lineHeight: 16, paddingVertical: 5 }, legalText: { color: "#748278", fontSize: 9, lineHeight: 14 }, legalLink: { paddingVertical: 5 }, legalLinkText: { color: C.green, fontSize: 10, fontWeight: "700" }, devicePicker: { gap: 6 }, deviceOption: { borderWidth: 1, borderColor: C.border, borderRadius: 8, padding: 10 }, deviceOptionSelected: { borderColor: C.green, backgroundColor: "#203126" }, deviceOptionText: { color: C.text, fontFamily: "monospace", fontSize: 11 }, footer: { color: "#536157", fontSize: 8, fontFamily: "monospace", letterSpacing: 1.3, textAlign: "center", paddingVertical: 5 },
+  compareBlock: { gap: 9, borderTopColor: C.border, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 12 }, compareChips: { flexDirection: "row", gap: 7, paddingVertical: 2 }, compareChip: { borderWidth: 1, borderColor: C.border, borderRadius: 99, paddingHorizontal: 9, paddingVertical: 7, backgroundColor: "#101713" }, compareChipSelected: { borderColor: "#4d9444", backgroundColor: "#203126" }, compareChipText: { color: C.muted, fontSize: 8, fontFamily: "monospace" }, diffSource: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.border, paddingTop: 8, gap: 3 }, diffSourceTitle: { color: C.text, fontFamily: "monospace", fontSize: 10, fontWeight: "700" }, diffCategories: { color: C.cyan, fontSize: 9, fontFamily: "monospace", lineHeight: 14 },
 });

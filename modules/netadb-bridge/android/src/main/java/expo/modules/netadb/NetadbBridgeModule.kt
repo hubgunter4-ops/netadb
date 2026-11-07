@@ -1,11 +1,19 @@
 package expo.modules.netadb
 
+import android.content.ComponentName
 import android.content.Intent
+import android.content.ServiceConnection
+import android.content.pm.PackageManager
+import android.os.IBinder
 import androidx.core.content.FileProvider
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import org.json.JSONArray
+import org.json.JSONObject
+import rikka.shizuku.Shizuku
 import java.io.BufferedWriter
 import java.io.File
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
@@ -30,6 +38,73 @@ class NetadbBridgeModule : Module() {
         "available" to (adb.canExecute() && runCatching { runAdb(adb.absolutePath, listOf("version"), 10).exitCode == 0 }.getOrDefault(false)),
         "androidVersion" to android.os.Build.VERSION.RELEASE,
         "apiLevel" to android.os.Build.VERSION.SDK_INT
+      )
+    }
+
+    AsyncFunction("getShizukuStatus") {
+      val running = runCatching { Shizuku.pingBinder() }.getOrDefault(false)
+      val uid = if (running) runCatching { Shizuku.getUid() }.getOrDefault(-1) else -1
+      val granted = running && uid == 2000 && runCatching {
+        Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
+      }.getOrDefault(false)
+      mapOf(
+        "serviceRunning" to running,
+        "permissionGranted" to granted,
+        "uid" to uid,
+        "apiVersion" to if (running) runCatching { Shizuku.getVersion() }.getOrDefault(0) else 0
+      )
+    }
+
+    AsyncFunction("requestShizukuPermission") {
+      require(Shizuku.pingBinder()) { "Inicia Shizuku antes de solicitar permiso" }
+      require(Shizuku.getUid() == 2000) { "NetADB solo admite Shizuku en modo ADB/shell (UID 2000), no root/Sui" }
+      if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
+        Shizuku.requestPermission(24017)
+      }
+      true
+    }
+
+    AsyncFunction("listShizukuPackages") { includeUserApps: Boolean ->
+      val json = withShizukuUserService { it.listPackages(includeUserApps) }
+      val rows = JSONArray(json)
+      (0 until rows.length()).map { index ->
+        val row = rows.getJSONObject(index)
+        mapOf(
+          "packageName" to row.getString("packageName"),
+          "kind" to row.getString("kind"),
+          "disabled" to row.optBoolean("disabled", false),
+          "protected" to row.optBoolean("protected", false)
+        )
+      }
+    }
+
+    AsyncFunction("inspectShizukuPackage") { packageName: String ->
+      requireValidPackageName(packageName)
+      val row = JSONObject(withShizukuUserService { it.inspectPackage(packageName) })
+      mapOf(
+        "packageName" to row.getString("packageName"),
+        "uid" to if (row.isNull("uid")) null else row.getInt("uid"),
+        "versionCode" to if (row.isNull("versionCode")) null else row.getLong("versionCode"),
+        "versionName" to if (row.isNull("versionName")) null else row.getString("versionName"),
+        "targetSdk" to if (row.isNull("targetSdk")) null else row.getInt("targetSdk"),
+        "firstInstallTime" to if (row.isNull("firstInstallTime")) null else row.getString("firstInstallTime"),
+        "lastUpdateTime" to if (row.isNull("lastUpdateTime")) null else row.getString("lastUpdateTime"),
+        "packageDump" to row.optString("packageDump"),
+        "appOps" to row.optString("appOps"),
+        "appOpsExitCode" to row.optInt("appOpsExitCode", -1),
+        "networkStats" to row.optString("networkStats"),
+        "networkStatsAvailable" to row.optBoolean("networkStatsAvailable", false)
+      )
+    }
+
+    AsyncFunction("controlShizukuPackage") { packageName: String, action: String ->
+      requireValidPackageName(packageName)
+      require(action in setOf("force-stop", "disable-user", "enable")) { "Acción no permitida" }
+      val row = JSONObject(withShizukuUserService { it.controlPackage(packageName, action) })
+      mapOf(
+        "success" to row.optBoolean("success", false),
+        "exitCode" to row.optInt("exitCode", -1),
+        "output" to row.optString("output")
       )
     }
 
@@ -64,7 +139,8 @@ class NetadbBridgeModule : Module() {
         ?: throw IllegalStateException("Contexto Android no disponible")
       val ladb = context.resources.openRawResource(R.raw.ladb_license).bufferedReader().use { it.readText() }
       val adb = context.resources.openRawResource(R.raw.adb_library_license).bufferedReader().use { it.readText() }
-      mapOf("ladb" to ladb, "adb" to adb)
+      val shizuku = context.resources.openRawResource(R.raw.shizuku_api_license).bufferedReader().use { it.readText() }
+      mapOf("ladb" to ladb, "adb" to adb, "shizuku" to shizuku)
     }
 
     AsyncFunction("writeExport") { filename: String, contents: String ->
@@ -360,6 +436,44 @@ class NetadbBridgeModule : Module() {
     }
     if (worker != null && worker !== Thread.currentThread()) runCatching { worker.join(300) }
     if (emitClosed && serial != null) sendShellState(serial, "closed")
+  }
+
+  private fun requireValidPackageName(packageName: String) {
+    require(packageName.matches(Regex("[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+"))) { "Nombre de paquete inválido" }
+  }
+
+  private fun <T> withShizukuUserService(action: (INetadbShizukuService) -> T): T {
+    check(Shizuku.pingBinder()) { "Shizuku no está iniciado" }
+    check(Shizuku.getUid() == 2000) { "NetADB solo admite Shizuku en modo ADB/shell (UID 2000), no root/Sui" }
+    check(Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) { "Concede a NetADB el permiso solicitado en Shizuku" }
+    val context = appContext.reactContext?.applicationContext
+      ?: throw IllegalStateException("Contexto Android no disponible")
+    val args = Shizuku.UserServiceArgs(ComponentName(context, NetadbShizukuUserService::class.java))
+      .daemon(false)
+      .processNameSuffix("netadb")
+      .version(1)
+    val latch = CountDownLatch(1)
+    var remote: INetadbShizukuService? = null
+    val connection = object : ServiceConnection {
+      override fun onServiceConnected(name: ComponentName, binder: IBinder) {
+        remote = INetadbShizukuService.Stub.asInterface(binder)
+        latch.countDown()
+      }
+
+      override fun onServiceDisconnected(name: ComponentName) {
+        remote = null
+        latch.countDown()
+      }
+    }
+    try {
+      Shizuku.bindUserService(args, connection)
+      check(latch.await(20, TimeUnit.SECONDS)) { "Shizuku UserService no respondió" }
+      val service = remote ?: throw IllegalStateException("Shizuku UserService no entregó Binder")
+      check(service.asBinder().pingBinder()) { "Shizuku UserService dejó de responder" }
+      return action(service)
+    } finally {
+      runCatching { Shizuku.unbindUserService(args, connection, true) }
+    }
   }
 
   private fun appFilesDir(): File = appContext.reactContext?.applicationContext?.filesDir

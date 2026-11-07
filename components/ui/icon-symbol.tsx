@@ -21,6 +21,7 @@ const MAPPING = {
   "terminal.fill": "terminal",
   "waveform.path.ecg": "monitor-heart",
   "doc.text": "description",
+  "square.grid.2x2.fill": "apps",
 } satisfies IconMapping;
 
 /**

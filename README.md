@@ -37,13 +37,31 @@ pnpm test
 pnpm dev
 ```
 
-Los módulos nativos locales están en `modules/netadb-bridge/android/`; Expo Autolinking los registra desde `./modules`. Se empaquetan ejecutables ADB ARM64 y ARMv7 junto con ambos avisos de licencia.
+Los módulos nativos locales están en `modules/netadb-bridge/android/`; Expo Autolinking los registra desde `./modules`. Se empaquetan ejecutables ADB ARM64 y ARMv7 junto con sus avisos de licencia.
 
 ## APK
 
-Usa el flujo **Android Build** del Dashboard del proyecto móvil para compilar el APK de release a partir del código aceptado. No ejecutes Gradle/EAS release desde este Sandbox. La build debe completarse correctamente antes de compartir el APK. Distribuir el APK solo por instalación directa; no subirlo a Google Play Store.
+`eas.json` configura `preview` y `production` con `android.buildType: "apk"` y `distribution: "internal"`. Usa el flujo **Android Build** del Dashboard de Expo con uno de esos perfiles; enlaza el proyecto EAS y administra el keystore Android allí. No guardes credenciales de firma en Git ni ejecutes Gradle/EAS release desde este Sandbox. Comparte el APK solo después de que la build real termine correctamente y se pruebe en un dispositivo. Distribuirlo por instalación directa; no subirlo a Google Play Store. Consulta [`docs/ESTADO_Y_PROCESO_APK.md`](docs/ESTADO_Y_PROCESO_APK.md) para los pasos y pendientes.
 
 ## Referencias y licencias
 
 - Arquitectura de referencia: [tytydraco/LADB](https://github.com/tytydraco/ladb) y [releases de Jobians](https://github.com/Jobians/ladb-apk-download/releases).
 - Avisos: [`modules/netadb-bridge/THIRD_PARTY_NOTICES.md`](modules/netadb-bridge/THIRD_PARTY_NOTICES.md), [`LADB-LICENSE.txt`](modules/netadb-bridge/LADB-LICENSE.txt) y [`ADB-LIBRARY-LICENSE.txt`](modules/netadb-bridge/ADB-LIBRARY-LICENSE.txt). Los textos completos también se distribuyen como recursos consultables en el APK.
+
+## Comparar snapshots
+
+La pestaña **Diagnóstico** permite elegir dos capturas de la sesión y comparar localmente cada fuente, con líneas añadidas/eliminadas, errores por captura y categorías heurísticas (conectividad, Wi‑Fi, DNS, IP/rutas, telefonía). El comparador no altera las fuentes ni demuestra por sí mismo una causa raíz.
+
+## Apps, Shizuku e inspección sin root
+
+La pestaña **Apps** requiere instalar e iniciar Shizuku en modo ADB/shell, conceder su permiso a NetADB y permanecer en UID 2000; NetADB rechaza el backend root/Sui. Shizuku puede reiniciarse tras un reboot. La ficha consulta el dump de paquete, permisos/componentes que Android expone, AppOps y filas de estadísticas netstats asociadas al UID cuando están disponibles. Detener, deshabilitar y habilitar son acciones separadas, con confirmación. No se desinstala ni se borran datos.
+
+Estas estadísticas son contadores agregados por UID; no revelan por sí solas IPs/dominios remotos ni sockets vivos. Sin root tampoco es posible inyectar código en Zygote ni leer la memoria privada de otra app. La captura VPN propia consentida está **pendiente de implementación**: la decisión vigente es solicitar el permiso de Android desde NetADB, filtrar el túnel a una app seleccionada y añadir forwarding TCP/UDP para no interrumpir su conectividad. Los proyectos MIT [hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel) y [hev-socks5-server](https://github.com/heiher/hev-socks5-server) son candidatos investigados, no dependencias incluidas todavía. Android permite una VPN activa por usuario/perfil; la captura propuesta se limita a metadatos, no descifra TLS y observa principalmente conexiones salientes.
+
+La documentación del estado, el procedimiento EAS y las tareas pendientes está en [`docs/ESTADO_Y_PROCESO_APK.md`](docs/ESTADO_Y_PROCESO_APK.md). La configuración [`eas.json`](eas.json) contiene perfiles `preview` y `production` para APK interno; aún se requiere enlazar el proyecto Expo, confirmar credenciales de firma, terminar las funciones nativas y completar una build real. [PCAPdroid](https://github.com/emanuele-f/PCAPdroid) sigue siendo una alternativa externa, pero no es la arquitectura elegida para NetADB.
+
+## Fuentes técnicas
+
+- [Shizuku API: UserService, niveles ADB/root y permisos](https://github.com/RikkaApps/Shizuku-API)
+- [Android VpnService](https://developer.android.com/develop/connectivity/vpn) y [NetworkStatsManager](https://developer.android.com/reference/android/app/usage/NetworkStatsManager)
+- [Guía PCAPdroid: captura sin root y límites](https://emanuele-f.github.io/PCAPdroid/quick_start.html) y [API para apps externas](https://github.com/emanuele-f/PCAPdroid/blob/master/docs/app_api.md)

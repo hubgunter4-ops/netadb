@@ -9,7 +9,7 @@ const green = "#7cff6b";
 const muted = "#a5b3a8";
 
 export default function LicensesScreen() {
-  const [licenses, setLicenses] = useState<{ ladb: string; adb: string } | null>(null);
+  const [licenses, setLicenses] = useState<{ ladb: string; adb: string; shizuku: string } | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
     if (Platform.OS !== "android" || !NetadbBridge) {
@@ -33,6 +33,8 @@ export default function LicensesScreen() {
           <View style={styles.licenseBox}><Text selectable style={styles.license}>{licenses.ladb}</Text></View>
           <Text style={styles.heading}>Ejecutable ADB · Apache 2.0</Text>
           <View style={styles.licenseBox}><Text selectable style={styles.license}>{licenses.adb}</Text></View>
+          <Text style={styles.heading}>Shizuku API · licencia MIT</Text>
+          <View style={styles.licenseBox}><Text selectable style={styles.license}>{licenses.shizuku}</Text></View>
         </> : null}
       </ScrollView>
     </ScreenContainer>

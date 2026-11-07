@@ -9,6 +9,7 @@ export default function TabLayout() {
   return <Tabs screenOptions={{ headerShown: false, tabBarButton: HapticTab, tabBarActiveTintColor: "#83FF70", tabBarInactiveTintColor: "#77857B", tabBarStyle: { paddingTop: 7, paddingBottom: bottomPadding, height: 56 + bottomPadding, backgroundColor: "#0B100D", borderTopColor: "#26382B", borderTopWidth: 0.5 } }}>
     <Tabs.Screen name="index" options={{ title: "Terminal", tabBarIcon: ({ color }) => <IconSymbol size={25} name="terminal.fill" color={color} /> }} />
     <Tabs.Screen name="diagnostics" options={{ title: "Diagnóstico", tabBarIcon: ({ color }) => <IconSymbol size={24} name="waveform.path.ecg" color={color} /> }} />
+    <Tabs.Screen name="apps" options={{ title: "Apps", tabBarIcon: ({ color }) => <IconSymbol size={24} name="square.grid.2x2.fill" color={color} /> }} />
     <Tabs.Screen name="licenses" options={{ title: "Licencias", tabBarIcon: ({ color }) => <IconSymbol size={24} name="doc.text" color={color} /> }} />
   </Tabs>;
 }
