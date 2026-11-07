@@ -18,7 +18,7 @@ SRCDIR := $(LOCAL_PATH)/src
 
 include $(CLEAR_VARS)
 include $(LOCAL_PATH)/build.mk
-LOCAL_MODULE    := liblwip
+LOCAL_MODULE    := lwip
 LOCAL_SRC_FILES := $(patsubst $(SRCDIR)/%,src/%,$(SRCFILES))
 LOCAL_C_INCLUDES := $(LOCAL_PATH)/src/include $(LOCAL_PATH)/src/ports/include
 LOCAL_CFLAGS += -fno-stack-clash-protection -DFD_SET_DEFINED -DSOCKLEN_T_DEFINED

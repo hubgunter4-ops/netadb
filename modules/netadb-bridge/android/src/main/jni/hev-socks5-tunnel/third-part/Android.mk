@@ -19,7 +19,7 @@ SRCDIR := $(LOCAL_PATH)/src
 include $(CLEAR_VARS)
 include $(LOCAL_PATH)/build.mk
 include $(LOCAL_PATH)/configs.mk
-LOCAL_MODULE    := libyaml
+LOCAL_MODULE    := yaml
 LOCAL_SRC_FILES := $(patsubst $(SRCDIR)/%,src/%,$(SRCFILES))
 LOCAL_C_INCLUDES := $(SRCDIR) $(LOCAL_PATH)/include
 LOCAL_CFLAGS += -fno-stack-clash-protection $(CONFIG_CFLAGS)

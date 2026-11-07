@@ -63,7 +63,7 @@ const config: ExpoConfig & { logoUrl: string } = {
   logoUrl: "https://files.manuscdn.com/user_upload_by_module/session_file/310519664035504776/bHfjuLxejLUjzlCA.png",
   name: env.appName,
   slug: env.appSlug,
-  version: "1.0.0",
+  version: "1.0.3",
   runtimeVersion: { policy: "appVersion" },
   updates: {
     url: "https://u.expo.dev/30c1641a-11cb-4912-8fcf-b1f7700892b6",
