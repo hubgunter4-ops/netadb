@@ -10,7 +10,7 @@ import android.content.pm.PackageManager
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.IBinder
-import android.os.Process
+import android.os.Process as AndroidProcess
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import expo.modules.kotlin.modules.Module
@@ -20,15 +20,16 @@ import org.json.JSONObject
 import rikka.shizuku.Shizuku
 import java.io.BufferedWriter
 import java.io.File
+import java.lang.Process as JavaProcess
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
 class NetadbBridgeModule : Module() {
-  private var logcatProcess: Process? = null
+  private var logcatProcess: JavaProcess? = null
   private var logcatThread: Thread? = null
   private val shellLock = Any()
-  private var shellProcess: Process? = null
+  private var shellProcess: JavaProcess? = null
   private var shellInput: BufferedWriter? = null
   private var shellThread: Thread? = null
   private var shellSerial: String? = null
@@ -338,11 +339,11 @@ class NetadbBridgeModule : Module() {
           writer.newLine()
           writer.flush()
         }
-        val completed = process.waitFor(25, TimeUnit.SECONDS)
-        if (!completed) process.destroyForcibly()
+        val completed = waitForProcess(process, 25, TimeUnit.SECONDS)
+        if (!completed) terminateProcess(process)
         completed
       } finally {
-        if (process.isAlive) process.destroyForcibly()
+        if (isProcessAlive(process)) terminateProcess(process)
         outputThread.join(1500)
       }
       val outputText = synchronized(outputLock) { output.toString() }
@@ -410,14 +411,14 @@ class NetadbBridgeModule : Module() {
       require(serial.matches(Regex("[A-Za-z0-9._:-]{1,128}"))) { "Identificador de dispositivo inválido" }
       closeShellInternal(emitClosed = false)
       val process = adbProcessBuilder(adbPath(), listOf("-s", serial, "shell")).start()
-      if (process.waitFor(500, TimeUnit.MILLISECONDS)) {
+      if (waitForProcess(process, 500, TimeUnit.MILLISECONDS)) {
         val output = process.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText().trim() }
         val exitCode = process.exitValue()
         val message = output.ifBlank { "ADB shell terminó al iniciar (código $exitCode)" }
         sendShellState(serial, "error", message = message, exitCode = exitCode)
         return@AsyncFunction mapOf("ready" to false, "serial" to serial, "output" to output)
       }
-      if (!process.isAlive) {
+      if (!isProcessAlive(process)) {
         val output = process.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText().trim() }
         val message = output.ifBlank { "ADB shell dejó de ejecutarse durante el inicio" }
         sendShellState(serial, "error", message = message)
@@ -431,13 +432,13 @@ class NetadbBridgeModule : Module() {
           process.inputStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
             lines.forEach { line -> sendEvent("onShellLine", mapOf("serial" to serial, "line" to line)) }
           }
-          val code = if (process.waitFor(2, TimeUnit.SECONDS)) process.exitValue() else 124
-          if (process.isAlive) process.destroyForcibly()
+          val code = if (waitForProcess(process, 2, TimeUnit.SECONDS)) process.exitValue() else 124
+          if (isProcessAlive(process)) terminateProcess(process)
           val stillCurrent = synchronized(shellLock) { shellProcess === process }
           if (stillCurrent) sendShellState(serial, if (code == 0) "closed" else "error", exitCode = code)
         } catch (e: Exception) {
           val stillCurrent = synchronized(shellLock) { shellProcess === process }
-          if (stillCurrent && process.isAlive) sendShellState(serial, "error", message = e.message ?: "Error leyendo shell")
+          if (stillCurrent && isProcessAlive(process)) sendShellState(serial, "error", message = e.message ?: "Error leyendo shell")
         } finally {
           synchronized(shellLock) {
             if (shellProcess === process) { shellProcess = null; shellInput = null; shellThread = null; shellSerial = null }
@@ -454,7 +455,7 @@ class NetadbBridgeModule : Module() {
       synchronized(shellLock) {
         val process = shellProcess ?: return@synchronized false
         val input = shellInput ?: return@synchronized false
-        if (!process.isAlive) return@synchronized false
+        if (!isProcessAlive(process)) return@synchronized false
         runCatching { input.apply { write(command); newLine(); flush() } }.isSuccess
       }
     }
@@ -487,9 +488,9 @@ class NetadbBridgeModule : Module() {
                 sendEvent("onLogLine", mapOf("line" to line))
               }
             }
-            val exited = process.waitFor(2, TimeUnit.SECONDS)
-            if (!exited) process.destroyForcibly()
-            val exitCode = if (exited || runCatching { process.waitFor(2, TimeUnit.SECONDS) }.getOrDefault(false)) process.exitValue() else 124
+            val exited = waitForProcess(process, 2, TimeUnit.SECONDS)
+            if (!exited) terminateProcess(process)
+            val exitCode = if (exited || runCatching { waitForProcess(process, 2, TimeUnit.SECONDS) }.getOrDefault(false)) process.exitValue() else 124
             writer.append("\n# NetADB stream ended · exitCode=$exitCode\n").flush()
           }
         } catch (_: Exception) {
@@ -537,11 +538,11 @@ class NetadbBridgeModule : Module() {
         writer.newLine()
         writer.flush()
       }
-      val completed = process.waitFor(25, TimeUnit.SECONDS)
-      if (!completed) process.destroyForcibly()
+      val completed = waitForProcess(process, 25, TimeUnit.SECONDS)
+      if (!completed) terminateProcess(process)
       completed
     } finally {
-      if (process.isAlive) process.destroyForcibly()
+      if (isProcessAlive(process)) terminateProcess(process)
       outputThread.join(1500)
     }
     val text = synchronized(outputLock) { output.toString() }
@@ -623,8 +624,8 @@ class NetadbBridgeModule : Module() {
         // Process termination closes the output stream.
       }
     }
-    val finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
-    if (!finished) process.destroyForcibly()
+    val finished = waitForProcess(process, timeoutSeconds, TimeUnit.SECONDS)
+    if (!finished) terminateProcess(process)
     outputThread.join(1500)
     val outputText = synchronized(outputLock) { output.toString() }
     return CommandResult(outputText, if (finished) process.exitValue() else 124)
@@ -635,8 +636,8 @@ class NetadbBridgeModule : Module() {
     val worker = logcatThread
     process?.destroy()
     if (process != null) {
-      val exited = runCatching { process.waitFor(1, TimeUnit.SECONDS) }.getOrDefault(false)
-      if (!exited) process.destroyForcibly()
+      val exited = runCatching { waitForProcess(process, 1, TimeUnit.SECONDS) }.getOrDefault(false)
+      if (!exited) terminateProcess(process)
     }
     if (worker != null && worker !== Thread.currentThread()) {
       runCatching { worker.join(4500) }
@@ -653,7 +654,7 @@ class NetadbBridgeModule : Module() {
   }
 
   private fun closeShellInternal(emitClosed: Boolean = true) {
-    val process: Process?
+    val process: JavaProcess?
     val input: BufferedWriter?
     val worker: Thread?
     val serial: String?
@@ -670,17 +671,52 @@ class NetadbBridgeModule : Module() {
     if (process != null) {
       runCatching { input?.close() }
       process.destroy()
-      if (!runCatching { process.waitFor(300, TimeUnit.MILLISECONDS) }.getOrDefault(false)) process.destroyForcibly()
+      if (!runCatching { waitForProcess(process, 300, TimeUnit.MILLISECONDS) }.getOrDefault(false)) terminateProcess(process)
     }
     if (worker != null && worker !== Thread.currentThread()) runCatching { worker.join(300) }
     if (emitClosed && serial != null) sendShellState(serial, "closed")
+  }
+
+  private fun isProcessAlive(process: JavaProcess): Boolean = try {
+    process.exitValue()
+    false
+  } catch (_: IllegalThreadStateException) {
+    true
+  }
+
+  private fun waitForProcess(process: JavaProcess, timeout: Long, unit: TimeUnit): Boolean {
+    val timeoutNanos = unit.toNanos(timeout)
+    val startedAtNanos = System.nanoTime()
+    while (isProcessAlive(process)) {
+      val elapsedNanos = System.nanoTime() - startedAtNanos
+      val remainingNanos = timeoutNanos - elapsedNanos
+      if (remainingNanos <= 0L) return false
+      val sleepMillis = TimeUnit.NANOSECONDS.toMillis(remainingNanos).coerceIn(1L, 50L)
+      try {
+        Thread.sleep(sleepMillis)
+      } catch (_: InterruptedException) {
+        Thread.currentThread().interrupt()
+        return !isProcessAlive(process)
+      }
+    }
+    return true
+  }
+
+  private fun terminateProcess(process: JavaProcess, waitMillis: Long = 500L) {
+    if (!isProcessAlive(process)) return
+    process.destroy()
+    if (waitForProcess(process, waitMillis, TimeUnit.MILLISECONDS)) return
+    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+      process.destroyForcibly()
+      waitForProcess(process, 1_000L, TimeUnit.MILLISECONDS)
+    }
   }
 
   private fun hasUsageAccess(context: android.content.Context): Boolean {
     val appOps = context.getSystemService(AppOpsManager::class.java) ?: return false
     return appOps.checkOpNoThrow(
       AppOpsManager.OPSTR_GET_USAGE_STATS,
-      Process.myUid(),
+      AndroidProcess.myUid(),
       context.packageName,
     ) == AppOpsManager.MODE_ALLOWED
   }

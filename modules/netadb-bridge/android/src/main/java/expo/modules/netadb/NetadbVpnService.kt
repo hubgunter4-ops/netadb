@@ -503,10 +503,10 @@ private object NetadbVpnEventStore {
   }
 
   @Synchronized
-  fun snapshot(): List<Map<String, Any>> = events.values
+  fun snapshot(): List<Map<String, Any?>> = events.values
     .sortedByDescending { it.lastSeen }
     .map {
-      mapOf(
+      mapOf<String, Any?>(
         "protocol" to it.protocol,
         "endpoint" to it.endpoint,
         "domain" to it.domain,
