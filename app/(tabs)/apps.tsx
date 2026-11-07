@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, AppState, Linking, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { ScreenContainer } from "@/components/screen-container";
 import { NetadbBridge } from "@/modules/netadb-bridge";
-import type { ShizukuAction, ShizukuInspection, ShizukuPackage, ShizukuStatus, VpnAppTarget, VpnCaptureStatus } from "@/modules/netadb-bridge";
+import type { ShizukuAction, ShizukuInspection, ShizukuPackage, ShizukuStatus, StandardAndroidStatus, VpnAppTarget, VpnCaptureStatus } from "@/modules/netadb-bridge";
 
 const C = { bg: "#111814", panel: "#18221c", panel2: "#1d2a22", border: "#2c4130", text: "#e7f3e7", muted: "#90a394", green: "#7cff6b", amber: "#ffbe55", red: "#ff666d", cyan: "#67dce5" };
 const SHIZUKU_SETUP = "https://shizuku.rikka.app/guide/setup/";
@@ -18,6 +18,11 @@ function formatBytes(value: number): string {
   return `${amount.toFixed(1)} ${units[unit]}`;
 }
 
+function csvCell(value: unknown): string {
+  const text = value == null ? "" : String(value);
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
 function Button({ label, onPress, disabled, secondary = false, danger = false }: { label: string; onPress: () => void; disabled?: boolean; secondary?: boolean; danger?: boolean }) {
   return <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.button, secondary && styles.secondary, danger && styles.danger, disabled && styles.disabled, pressed && !disabled && { opacity: 0.78 }]}><Text style={[styles.buttonText, secondary && styles.secondaryText, danger && { color: C.red }]}>{label}</Text></Pressable>;
 }
@@ -30,6 +35,7 @@ function Info({ label, value }: { label: string; value: string }) {
 
 export default function AppsScreen() {
   const [status, setStatus] = useState<ShizukuStatus | null>(null);
+  const [standardStatus, setStandardStatus] = useState<StandardAndroidStatus | null>(null);
   const [packages, setPackages] = useState<ShizukuPackage[]>([]);
   const [includeUserApps, setIncludeUserApps] = useState(false);
   const [query, setQuery] = useState("");
@@ -45,6 +51,7 @@ export default function AppsScreen() {
   const [vpnQuery, setVpnQuery] = useState("");
   const [vpnLoading, setVpnLoading] = useState(false);
   const [vpnBusy, setVpnBusy] = useState(false);
+  const [trafficQuery, setTrafficQuery] = useState("");
   const [message, setMessage] = useState<Message | null>(null);
   const pendingVpnStart = useRef(false);
 
@@ -57,6 +64,12 @@ export default function AppsScreen() {
     try { setStatus(await NetadbBridge.getShizukuStatus()); }
     catch (error) { setMessage({ tone: "bad", text: `No se pudo consultar Shizuku: ${String(error)}` }); }
     finally { setStatusBusy(false); }
+  }, []);
+
+  const refreshStandardStatus = useCallback(async () => {
+    if (!NetadbBridge) { setStandardStatus(null); return; }
+    try { setStandardStatus(await NetadbBridge.getStandardAndroidStatus()); }
+    catch (error) { setMessage({ tone: "bad", text: `No se pudo consultar el modo estándar: ${String(error)}` }); }
   }, []);
 
   const refreshVpnStatus = useCallback(async () => {
@@ -72,11 +85,13 @@ export default function AppsScreen() {
 
   useEffect(() => {
     void refreshStatus();
+    void refreshStandardStatus();
     void refreshVpnStatus();
     const subscription = AppState.addEventListener("change", (state) => {
       if (state === "active") {
         void (async () => {
           await refreshStatus();
+          await refreshStandardStatus();
           await refreshVpnStatus();
           // VpnService.prepare() returns before the Android consent screen finishes.
           // Continue the requested start when the app becomes active again.
@@ -104,7 +119,7 @@ export default function AppsScreen() {
       }
     });
     return () => subscription.remove();
-  }, [refreshStatus, refreshVpnStatus, vpnTargetPackage]);
+  }, [refreshStatus, refreshStandardStatus, refreshVpnStatus, vpnTargetPackage]);
 
   useEffect(() => {
     if (!vpnStatus?.running) return;
@@ -115,12 +130,13 @@ export default function AppsScreen() {
   const canUseShizuku = status?.serviceRunning === true && status.uid === 2000 && status.permissionGranted === true;
   const loadPackages = useCallback(async () => {
     if (!NetadbBridge) { setMessage({ tone: "warn", text: "El puente nativo solo está disponible en el APK Android." }); return; }
-    if (!canUseShizuku) { setMessage({ tone: "warn", text: "Inicia Shizuku en modo ADB y concede su permiso a NetADB antes de cargar paquetes." }); return; }
     setLoading(true);
     try {
-      const result = await NetadbBridge.listShizukuPackages(includeUserApps);
+      const result = canUseShizuku
+        ? await NetadbBridge.listShizukuPackages(includeUserApps)
+        : await NetadbBridge.listStandardPackages(includeUserApps);
       setPackages(result);
-      setMessage({ tone: "good", text: `${result.length} paquetes recibidos de Android. Solo se consultó información; no se modificó ningún paquete.` });
+      setMessage({ tone: "good", text: `${result.length} paquetes recibidos mediante ${canUseShizuku ? "Shizuku" : "PackageManager"}. Solo se consultó información; no se modificó ningún paquete.` });
     } catch (error) { setMessage({ tone: "bad", text: `No se pudo enumerar paquetes: ${String(error)}` }); }
     finally { setLoading(false); }
   }, [canUseShizuku, includeUserApps]);
@@ -134,13 +150,23 @@ export default function AppsScreen() {
   };
 
   const inspect = async (packageName: string) => {
-    if (!NetadbBridge || !canUseShizuku) return;
+    if (!NetadbBridge) return;
     setSelected(packageName); setInspection(null); setInspectionBusy(true);
     try {
-      setInspection(await NetadbBridge.inspectShizukuPackage(packageName));
+      setInspection(await (canUseShizuku
+        ? NetadbBridge.inspectShizukuPackage(packageName)
+        : NetadbBridge.inspectStandardPackage(packageName)));
       setMessage({ tone: "good", text: `Inspección de solo lectura recibida para ${packageName}.` });
     } catch (error) { setMessage({ tone: "bad", text: `No se pudo inspeccionar ${packageName}: ${String(error)}` }); }
     finally { setInspectionBusy(false); }
+  };
+
+  const openUsageAccess = async () => {
+    if (!NetadbBridge) return;
+    try {
+      await NetadbBridge.openStandardUsageAccessSettings();
+      setMessage({ tone: "warn", text: "Concede a NetADB el acceso de uso y vuelve para actualizar las estadísticas agregadas." });
+    } catch (error) { setMessage({ tone: "bad", text: `No se pudo abrir Acceso de uso: ${String(error)}` }); }
   };
 
   const doAction = async (app: ShizukuPackage, action: ShizukuAction) => {
@@ -178,6 +204,36 @@ export default function AppsScreen() {
     const value = vpnQuery.trim().toLowerCase();
     return vpnTargets.filter((item) => !value || item.packageName.toLowerCase().includes(value) || item.label.toLowerCase().includes(value));
   }, [vpnTargets, vpnQuery]);
+
+  const resolvedDomains = useMemo(() => {
+    const query = trafficQuery.trim().toLowerCase();
+    const byDomain = new Map<string, { domain: string; endpoint: string; lastSeen: number; events: number }>();
+    for (const connection of vpnStatus?.connections ?? []) {
+      if (!connection.domain) continue;
+      const haystack = `${connection.domain} ${connection.endpoint} ${connection.protocol}`.toLowerCase();
+      if (query && !haystack.includes(query)) continue;
+      const current = byDomain.get(connection.domain);
+      if (!current || connection.lastSeen > current.lastSeen) {
+        byDomain.set(connection.domain, {
+          domain: connection.domain,
+          endpoint: connection.endpoint,
+          lastSeen: connection.lastSeen,
+          events: connection.events,
+        });
+      } else {
+        current.events += connection.events;
+      }
+    }
+    return [...byDomain.values()].sort((a, b) => b.lastSeen - a.lastSeen);
+  }, [trafficQuery, vpnStatus?.connections]);
+
+  const filteredConnections = useMemo(() => {
+    const query = trafficQuery.trim().toLowerCase();
+    return (vpnStatus?.connections ?? []).filter((connection) => {
+      if (!query) return true;
+      return `${connection.domain ?? ""} ${connection.endpoint} ${connection.protocol}`.toLowerCase().includes(query);
+    });
+  }, [trafficQuery, vpnStatus?.connections]);
 
   const loadVpnTargets = async () => {
     if (!NetadbBridge) { setMessage({ tone: "warn", text: "La captura VPN solo está disponible en el APK Android." }); return; }
@@ -245,6 +301,63 @@ export default function AppsScreen() {
     finally { setVpnBusy(false); }
   };
 
+  const exportVpnLog = async (format: "json" | "csv") => {
+    if (!NetadbBridge || !vpnStatus?.running) {
+      setMessage({ tone: "warn", text: "Inicia la captura VPN y genera tráfico antes de exportar el registro." });
+      return;
+    }
+    const exportedAt = new Date().toISOString();
+    const connections = vpnStatus.connections.map((connection) => ({
+      protocol: connection.protocol,
+      domain: connection.domain,
+      endpoint: connection.endpoint,
+      firstSeen: new Date(connection.firstSeen).toISOString(),
+      lastSeen: new Date(connection.lastSeen).toISOString(),
+      events: connection.events,
+      bytes: connection.bytes,
+      bytesHuman: formatBytes(connection.bytes),
+      openObserved: connection.openObserved,
+    }));
+    let contents: string;
+    let filename: string;
+    let mimeType: "application/json" | "text/csv";
+    if (format === "json") {
+      contents = JSON.stringify({
+        product: "NetADB",
+        exportedAt,
+        scope: "metadata-only",
+        packageName: vpnStatus.packageName,
+        totals: {
+          txPackets: vpnStatus.txPackets,
+          txBytes: vpnStatus.txBytes,
+          txBytesHuman: formatBytes(vpnStatus.txBytes),
+          rxPackets: vpnStatus.rxPackets,
+          rxBytes: vpnStatus.rxBytes,
+          rxBytesHuman: formatBytes(vpnStatus.rxBytes),
+        },
+        connections,
+      }, null, 2);
+      filename = `netadb-vpn-${Date.now()}.json`;
+      mimeType = "application/json";
+    } else {
+      const headers = ["exportedAt", "packageName", "protocol", "domain", "endpoint", "firstSeen", "lastSeen", "events", "bytes", "bytesHuman", "openObserved", "txPackets", "txBytes", "txBytesHuman", "rxPackets", "rxBytes", "rxBytesHuman"];
+      const rows = connections.length === 0 ? [[]] : connections.map((connection) => [
+        exportedAt, vpnStatus.packageName, connection.protocol, connection.domain, connection.endpoint,
+        connection.firstSeen, connection.lastSeen, connection.events, connection.bytes, connection.bytesHuman,
+        connection.openObserved, vpnStatus.txPackets, vpnStatus.txBytes, formatBytes(vpnStatus.txBytes),
+        vpnStatus.rxPackets, vpnStatus.rxBytes, formatBytes(vpnStatus.rxBytes),
+      ]);
+      contents = [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\n") + "\n";
+      filename = `netadb-vpn-${Date.now()}.csv`;
+      mimeType = "text/csv";
+    }
+    try {
+      const path = await NetadbBridge.writeExport(filename, contents);
+      await NetadbBridge.shareFile(path, mimeType);
+      setMessage({ tone: "good", text: `Registro ${format.toUpperCase()} preparado para compartir: ${connections.length} conexiones observadas.` });
+    } catch (error) { setMessage({ tone: "bad", text: `No se pudo exportar el registro VPN: ${String(error)}` }); }
+  };
+
   const statusTitle = !status?.serviceRunning ? "Shizuku no está iniciado" : status.uid !== 2000 ? "UID no compatible con modo sin root" : status.permissionGranted ? "Listo · Shizuku ADB" : "Falta autorizar NetADB";
   const statusBody = !status?.serviceRunning
     ? "Inicia Shizuku en modo ADB/shell. La lista y la ficha requieren que su servicio esté activo."
@@ -274,6 +387,17 @@ export default function AppsScreen() {
         </View>
       </View>
 
+      <View style={styles.statusCard}>
+        <View style={styles.statusTop}><Text style={styles.eyebrow}>MODO ESTÁNDAR ANDROID</Text></View>
+        <Text style={styles.statusTitle}>{standardStatus ? `${standardStatus.installedPackageCount} paquetes visibles` : "PackageManager disponible"}</Text>
+        <Text style={styles.body}>El inventario usa PackageManager sin Shizuku. Las estadísticas agregadas por UID usan NetworkStatsManager y requieren activar Acceso de uso en Ajustes.</Text>
+        <View style={styles.buttonRow}>
+          <Button label="COMPROBAR" secondary onPress={() => void refreshStandardStatus()} disabled={!NetadbBridge} />
+          {standardStatus && !standardStatus.usageAccessGranted ? <Button label="ACTIVAR ACCESO DE USO" onPress={() => void openUsageAccess()} /> : null}
+        </View>
+        <Text style={styles.subLabel}>{standardStatus?.usageAccessGranted ? "Acceso de uso concedido: las fichas mostrarán tráfico agregado de las últimas 24 horas." : "Sin Acceso de uso: se mostrarán metadatos de paquetes, pero no estadísticas de red por UID."}</Text>
+      </View>
+
       <View style={styles.notice}><Text style={styles.noticeIcon}>i</Text><Text style={styles.noticeText}>Modo sin root: Shizuku debe estar iniciado mediante ADB (UID 2000) y puede requerir reinicio tras cada reboot. Las estadísticas de tráfico son agregadas por UID: no muestran por sí solas IPs, dominios ni sockets activos.</Text></View>
 
       <View style={styles.card}>
@@ -291,6 +415,7 @@ export default function AppsScreen() {
           <Button label={vpnBusy ? "INICIANDO…" : "INICIAR CAPTURA"} onPress={startLocalVpn} disabled={!NetadbBridge || !vpnTargetPackage || !vpnStatus?.permissionGranted || Boolean(vpnStatus?.otherVpnActive) || Boolean(vpnStatus?.running) || vpnBusy} />
           {vpnStatus?.running ? <Button label="DETENER CAPTURA" danger onPress={() => void stopLocalVpn()} disabled={vpnBusy} /> : null}
           <Button label="ACTUALIZAR" secondary onPress={() => void refreshVpnStatus()} disabled={!NetadbBridge || vpnBusy} />
+          {vpnStatus?.running ? <><Button label="EXPORTAR JSON" secondary onPress={() => void exportVpnLog("json")} disabled={vpnBusy} /><Button label="EXPORTAR CSV" secondary onPress={() => void exportVpnLog("csv")} disabled={vpnBusy} /></> : null}
         </View>
         {vpnTargets.length > 0 ? <>
           <TextInput value={vpnQuery} onChangeText={setVpnQuery} placeholder="Filtrar apps por nombre o paquete" placeholderTextColor="#64746a" autoCapitalize="none" autoCorrect={false} style={styles.input} selectionColor={C.green} />
@@ -305,14 +430,25 @@ export default function AppsScreen() {
         </> : <Text style={styles.empty}>Carga las aplicaciones instaladas y selecciona exactamente una antes de iniciar.</Text>}
         {vpnStatus?.running ? <>
           <View style={styles.infoGrid}>
-            <Info label="TÚNEL · TX" value={`${formatBytes(vpnStatus.txBytes)} · ${vpnStatus.txPackets} paquetes`} />
-            <Info label="TÚNEL · RX" value={`${formatBytes(vpnStatus.rxBytes)} · ${vpnStatus.rxPackets} paquetes`} />
+            <Info label="ENVIADOS · TX" value={`${formatBytes(vpnStatus.txBytes)} · ${vpnStatus.txPackets} paquetes`} />
+            <Info label="RECIBIDOS · RX" value={`${formatBytes(vpnStatus.rxBytes)} · ${vpnStatus.rxPackets} paquetes`} />
           </View>
-          <Text style={styles.subLabel}>Los bytes y paquetes son contadores globales de la interfaz TUN seleccionada y pueden no equivaler a datos entregados por una app remota. Cada CONNECT TCP es un destino solicitado; no prueba que la conexión se completara. No se intercepta ni descifra TLS.</Text>
+          <Text style={styles.subLabel}>Los bytes y paquetes se muestran en formato legible y son contadores globales de la interfaz TUN limitada a {vpnStatus.packageName || "la app seleccionada"}. Cada CONNECT TCP es un destino solicitado; no prueba que la conexión se completara. No se intercepta ni descifra TLS.</Text>
+          <TextInput value={trafficQuery} onChangeText={setTrafficQuery} placeholder="Filtrar por dominio, IP, puerto o protocolo" placeholderTextColor="#64746a" autoCapitalize="none" autoCorrect={false} style={styles.input} selectionColor={C.green} accessibilityLabel="Filtrar tráfico por dominio o dirección IP" />
           <View style={styles.detailBlock}>
-            <Text style={styles.label}>DESTINOS OBSERVADOS · {vpnStatus.connections.length}</Text>
-            {vpnStatus.connections.length === 0 ? <Text style={styles.empty}>Aún no se observaron solicitudes TCP ni datagramas UDP.</Text> : vpnStatus.connections.slice(0, 40).map((connection) => <View key={`${connection.protocol}:${connection.endpoint}`} style={styles.vpnEvent}>
-              <Text selectable style={styles.packageName}>{connection.protocol.toUpperCase()} · {connection.endpoint}</Text>
+            <Text style={styles.label}>DOMINIOS RESUELTOS EN TIEMPO REAL · {resolvedDomains.length}{trafficQuery.trim() ? ` · filtro: ${trafficQuery.trim()}` : ""}</Text>
+            {resolvedDomains.length === 0
+              ? <Text style={styles.empty}>{trafficQuery.trim() ? "No hay dominios que coincidan con el filtro." : "Aún no se observó un hostname. Si la app usa una IP directa o DNS cifrado, solo se mostrará el endpoint."}</Text>
+              : resolvedDomains.slice(0, 40).map((item) => <View key={item.domain} style={styles.vpnEvent}>
+                <Text selectable style={styles.packageName}>{item.domain}</Text>
+                <Text style={styles.subLabel}>Endpoint {item.endpoint} · {item.events} eventos · visto {new Date(item.lastSeen).toLocaleTimeString()}</Text>
+              </View>)}
+          </View>
+          <View style={styles.detailBlock}>
+            <Text style={styles.label}>DESTINOS OBSERVADOS · {filteredConnections.length}{trafficQuery.trim() ? ` / ${vpnStatus.connections.length}` : ""}</Text>
+            {filteredConnections.length === 0 ? <Text style={styles.empty}>{trafficQuery.trim() ? "No hay destinos que coincidan con el filtro." : "Aún no se observaron solicitudes TCP ni datagramas UDP."}</Text> : filteredConnections.slice(0, 40).map((connection) => <View key={`${connection.protocol}:${connection.endpoint}`} style={styles.vpnEvent}>
+              <Text selectable style={styles.packageName}>{connection.protocol.toUpperCase()} · {connection.domain ? `${connection.domain} · ` : ""}{connection.endpoint}</Text>
+              {connection.domain ? <Text selectable style={styles.appMeta}>DOMINIO RESUELTO · {connection.domain}</Text> : null}
               <Text style={styles.subLabel}>Visto {new Date(connection.lastSeen).toLocaleTimeString()} · eventos {connection.events}{connection.protocol === "udp" ? ` · ${formatBytes(connection.bytes)} en datagramas observados` : connection.openObserved ? " · solicitud CONNECT observada" : ""}</Text>
             </View>)}
           </View>
@@ -324,7 +460,7 @@ export default function AppsScreen() {
         <CardTitle title="Inventario de paquetes" note="Por defecto muestra apps del sistema. Puedes incluir apps de usuario." />
         <View style={styles.switchRow}><View style={{ flex: 1 }}><Text style={styles.label}>Incluir apps de usuario</Text><Text style={styles.subLabel}>Además de paquetes del sistema</Text></View><Switch value={includeUserApps} onValueChange={setIncludeUserApps} trackColor={{ false: C.border, true: "#426947" }} thumbColor={includeUserApps ? C.green : "#a8b5aa"} /></View>
         <TextInput value={query} onChangeText={setQuery} placeholder="Filtrar por nombre de paquete" placeholderTextColor="#64746a" autoCapitalize="none" autoCorrect={false} style={styles.input} selectionColor={C.green} />
-        <Button label={loading ? "CARGANDO…" : "CARGAR / ACTUALIZAR"} onPress={() => void loadPackages()} disabled={loading || !canUseShizuku} />
+        <Button label={loading ? "CARGANDO…" : "CARGAR / ACTUALIZAR"} onPress={() => void loadPackages()} disabled={loading || !NetadbBridge} />
         {loading ? <ActivityIndicator color={C.green} /> : null}
         {filtered.length === 0 ? <Text style={styles.empty}>{packages.length ? "No hay coincidencias con ese filtro." : "El inventario todavía no se ha cargado."}</Text> : filtered.slice(0, 250).map((app) => <View key={app.packageName} style={styles.appRow}>
           <Pressable onPress={() => void inspect(app.packageName)} style={{ flex: 1, gap: 4 }} accessibilityRole="button" accessibilityLabel={`Inspeccionar ${app.packageName}`}>
@@ -333,8 +469,8 @@ export default function AppsScreen() {
           </Pressable>
           <View style={styles.appActions}>
             <Pressable onPress={() => void inspect(app.packageName)} style={styles.miniButton}><Text style={styles.miniText}>VER</Text></Pressable>
-            {app.disabled ? <Pressable disabled={Boolean(busyPackage)} onPress={() => void doAction(app, "enable")} style={styles.miniButton}><Text style={styles.miniText}>ACTIVAR</Text></Pressable> : !app.protected ? <Pressable disabled={Boolean(busyPackage)} onPress={() => void doAction(app, "disable-user")} style={[styles.miniButton, styles.miniDanger]}><Text style={[styles.miniText, { color: C.amber }]}>DESACTIVAR</Text></Pressable> : null}
-            {!app.protected ? <Pressable disabled={Boolean(busyPackage)} onPress={() => void doAction(app, "force-stop")} style={styles.miniButton}><Text style={styles.miniText}>DETENER</Text></Pressable> : null}
+            {app.disabled ? <Pressable disabled={Boolean(busyPackage) || !canUseShizuku} onPress={() => void doAction(app, "enable")} style={styles.miniButton}><Text style={styles.miniText}>ACTIVAR</Text></Pressable> : !app.protected ? <Pressable disabled={Boolean(busyPackage) || !canUseShizuku} onPress={() => void doAction(app, "disable-user")} style={[styles.miniButton, styles.miniDanger]}><Text style={[styles.miniText, { color: C.amber }]}>DESACTIVAR</Text></Pressable> : null}
+            {!app.protected ? <Pressable disabled={Boolean(busyPackage) || !canUseShizuku} onPress={() => void doAction(app, "force-stop")} style={styles.miniButton}><Text style={styles.miniText}>DETENER</Text></Pressable> : null}
           </View>
         </View>)}
         {filtered.length > 250 ? <Text style={styles.subLabel}>Mostrando 250 resultados; afina el filtro para los demás.</Text> : null}

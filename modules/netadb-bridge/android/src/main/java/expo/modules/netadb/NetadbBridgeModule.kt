@@ -3,10 +3,15 @@ package expo.modules.netadb
 import android.content.ComponentName
 import android.content.Intent
 import android.content.ServiceConnection
+import android.app.AppOpsManager
+import android.app.usage.NetworkStatsManager
+import android.net.ConnectivityManager
 import android.content.pm.PackageManager
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.IBinder
+import android.os.Process
+import android.provider.Settings
 import androidx.core.content.FileProvider
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -54,6 +59,75 @@ class NetadbBridgeModule : Module() {
         "permissionGranted" to granted,
         "uid" to uid,
         "apiVersion" to if (running) runCatching { Shizuku.getVersion() }.getOrDefault(0) else 0
+      )
+    }
+
+    AsyncFunction("getStandardAndroidStatus") {
+      val context = appContext.reactContext?.applicationContext
+        ?: throw IllegalStateException("Contexto Android no disponible")
+      mapOf(
+        "packageManagerAvailable" to true,
+        "usageAccessGranted" to hasUsageAccess(context),
+        "usageAccessSettings" to Settings.ACTION_USAGE_ACCESS_SETTINGS,
+        "installedPackageCount" to runCatching { context.packageManager.getInstalledApplications(0).size }.getOrDefault(0)
+      )
+    }
+
+    AsyncFunction("openStandardUsageAccessSettings") {
+      val context = appContext.reactContext?.applicationContext
+        ?: throw IllegalStateException("Contexto Android no disponible")
+      context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+      true
+    }
+
+    AsyncFunction("listStandardPackages") { includeUserApps: Boolean ->
+      val context = appContext.reactContext?.applicationContext
+        ?: throw IllegalStateException("Contexto Android no disponible")
+      @Suppress("DEPRECATION")
+      context.packageManager.getInstalledApplications(0)
+        .asSequence()
+        .filter { app ->
+          val isSystem = (app.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
+          includeUserApps || isSystem
+        }
+        .filter { it.packageName != context.packageName }
+        .map { app ->
+          val isSystem = (app.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
+          mapOf(
+            "packageName" to app.packageName,
+            "kind" to if (isSystem) "system" else "user",
+            "disabled" to !app.enabled,
+            "protected" to false,
+            "label" to context.packageManager.getApplicationLabel(app).toString().take(100)
+          )
+        }
+        .sortedBy { (it["label"] as String).lowercase() }
+        .toList()
+    }
+
+    AsyncFunction("inspectStandardPackage") { packageName: String ->
+      requireValidPackageName(packageName)
+      val context = appContext.reactContext?.applicationContext
+        ?: throw IllegalStateException("Contexto Android no disponible")
+      val pm = context.packageManager
+      @Suppress("DEPRECATION")
+      val info = pm.getPackageInfo(packageName, PackageManager.GET_PERMISSIONS)
+      val app = info.applicationInfo ?: throw IllegalStateException("Android no entregó ApplicationInfo")
+      val stats = queryStandardNetworkStats(context, app.uid)
+      val versionCode = if (android.os.Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong()
+      mapOf(
+        "packageName" to packageName,
+        "uid" to app.uid,
+        "versionCode" to versionCode,
+        "versionName" to (info.versionName ?: ""),
+        "targetSdk" to app.targetSdkVersion,
+        "firstInstallTime" to info.firstInstallTime.toString(),
+        "lastUpdateTime" to info.lastUpdateTime.toString(),
+        "packageDump" to "PackageManager · permisos solicitados:\n${info.requestedPermissions?.joinToString("\n") ?: "Ninguno"}",
+        "appOps" to "Modo estándar: no se consultan AppOps arbitrarios de otros paquetes.",
+        "appOpsExitCode" to 0,
+        "networkStats" to stats.first,
+        "networkStatsAvailable" to stats.second
       )
     }
 
@@ -209,7 +283,7 @@ class NetadbBridgeModule : Module() {
       val root = appFilesDir().canonicalPath + File.separator
       val file = File(path).canonicalFile
       require(file.path.startsWith(root) && file.isFile) { "Solo se pueden compartir archivos internos de NetADB" }
-      require(mimeType in setOf("application/json", "application/zip", "text/plain")) { "Tipo de archivo no permitido" }
+      require(mimeType in setOf("application/json", "application/zip", "text/plain", "text/csv")) { "Tipo de archivo no permitido" }
       val uri = FileProvider.getUriForFile(context, "${context.packageName}.netadb.fileprovider", file)
       val intent = Intent(Intent.ACTION_SEND).apply {
         type = mimeType
@@ -600,6 +674,54 @@ class NetadbBridgeModule : Module() {
     }
     if (worker != null && worker !== Thread.currentThread()) runCatching { worker.join(300) }
     if (emitClosed && serial != null) sendShellState(serial, "closed")
+  }
+
+  private fun hasUsageAccess(context: android.content.Context): Boolean {
+    val appOps = context.getSystemService(AppOpsManager::class.java) ?: return false
+    return appOps.checkOpNoThrow(
+      AppOpsManager.OPSTR_GET_USAGE_STATS,
+      Process.myUid(),
+      context.packageName,
+    ) == AppOpsManager.MODE_ALLOWED
+  }
+
+  private fun queryStandardNetworkStats(context: android.content.Context, uid: Int): Pair<String, Boolean> {
+    if (!hasUsageAccess(context)) {
+      return "Acceso de uso no concedido; Android no permite leer estadísticas por UID." to false
+    }
+    val manager = context.getSystemService(NetworkStatsManager::class.java)
+      ?: return "NetworkStatsManager no está disponible en este dispositivo." to false
+    val end = System.currentTimeMillis()
+    val start = end - 24L * 60L * 60L * 1000L
+    var rxBytes = 0L
+    var txBytes = 0L
+    var rxPackets = 0L
+    var txPackets = 0L
+    var queried = false
+    val lines = mutableListOf<String>()
+    for (networkType in intArrayOf(ConnectivityManager.TYPE_WIFI, ConnectivityManager.TYPE_MOBILE)) {
+      try {
+        val stats = manager.queryDetailsForUid(networkType, null, start, end, uid)
+        val bucket = android.app.usage.NetworkStats.Bucket()
+        while (stats.hasNextBucket()) {
+          stats.getNextBucket(bucket)
+          queried = true
+          rxBytes += bucket.rxBytes
+          txBytes += bucket.txBytes
+          rxPackets += bucket.rxPackets
+          txPackets += bucket.txPackets
+        }
+        stats.close()
+      } catch (_: SecurityException) {
+        // Some Android builds expose usage access but still reject one transport.
+      } catch (_: RuntimeException) {
+        // Treat an unavailable transport as missing data, not as zero traffic.
+      }
+    }
+    lines += "Ventana: últimas 24 horas"
+    lines += "RX: $rxBytes bytes · $rxPackets paquetes"
+    lines += "TX: $txBytes bytes · $txPackets paquetes"
+    return lines.joinToString("\n") to queried
   }
 
   private fun requireValidPackageName(packageName: String) {

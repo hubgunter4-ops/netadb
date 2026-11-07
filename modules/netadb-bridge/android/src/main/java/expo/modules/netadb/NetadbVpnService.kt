@@ -474,19 +474,32 @@ private object NetadbVpnEventStore {
     val protocol = protocolRaw.lowercase().takeIf { it == "tcp" || it == "udp" } ?: return
     val endpoint = endpointRaw.replace(Regex("[\\r\\n\\u0000]"), " ").trim().take(256)
     if (endpoint.isBlank()) return
+    val domain = extractDomain(endpoint)
     val direction = directionRaw.lowercase().takeIf { it == "open" || it == "packet" } ?: "packet"
     val key = "$protocol|$endpoint"
     val now = System.currentTimeMillis()
     val item = events[key]
     if (item == null) {
       if (events.size >= MAX_EVENTS) events.remove(events.keys.first())
-      events[key] = MutableVpnEvent(protocol, endpoint, now, now, 1, bytes.coerceAtLeast(0), direction == "open")
+      events[key] = MutableVpnEvent(protocol, endpoint, domain, now, now, 1, bytes.coerceAtLeast(0), direction == "open")
     } else {
       item.lastSeen = now
       item.events += 1
       item.bytes += bytes.coerceAtLeast(0)
       item.openObserved = item.openObserved || direction == "open"
+      if (item.domain == null) item.domain = domain
     }
+  }
+
+  private fun extractDomain(endpoint: String): String? {
+    val host = when {
+      endpoint.startsWith("[") -> endpoint.substringAfter("[").substringBefore("]")
+      endpoint.count { it == ':' } == 1 -> endpoint.substringBeforeLast(":")
+      else -> return null
+    }.trimEnd('.')
+    if (host.isBlank() || host.matches(Regex("[0-9.]+")) || host.contains(":")) return null
+    return host.takeIf { it.matches(Regex("(?i)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}")) }
+      ?.lowercase()
   }
 
   @Synchronized
@@ -496,6 +509,7 @@ private object NetadbVpnEventStore {
       mapOf(
         "protocol" to it.protocol,
         "endpoint" to it.endpoint,
+        "domain" to it.domain,
         "firstSeen" to it.firstSeen,
         "lastSeen" to it.lastSeen,
         "events" to it.events,
@@ -507,6 +521,7 @@ private object NetadbVpnEventStore {
   private data class MutableVpnEvent(
     val protocol: String,
     val endpoint: String,
+    var domain: String?,
     val firstSeen: Long,
     var lastSeen: Long,
     var events: Long,
