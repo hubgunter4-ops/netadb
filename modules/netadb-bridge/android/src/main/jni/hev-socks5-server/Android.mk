@@ -16,7 +16,7 @@
 TOP_PATH := $(call my-dir)
 
 ifeq ($(filter $(modules-get-list),yaml),)
-    include $(TOP_PATH)/third-part/yaml/Android.mk
+    include $(TOP_PATH)/third-part/Android.mk
 endif
 ifeq ($(filter $(modules-get-list),hev-task-system),)
     include $(TOP_PATH)/third-part/hev-task-system/Android.mk
