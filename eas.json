@@ -8,6 +8,7 @@
       "distribution": "internal",
       "channel": "development",
       "android": {
+        "image": "sdk-57",
         "buildType": "apk"
       }
     },
@@ -15,6 +16,7 @@
       "distribution": "internal",
       "channel": "preview",
       "android": {
+        "image": "sdk-57",
         "buildType": "apk"
       }
     },
@@ -23,8 +25,12 @@
       "channel": "production",
       "autoIncrement": true,
       "android": {
+        "image": "sdk-57",
         "buildType": "apk"
       }
+    },
+    "production-apk": {
+      "extends": "production"
     }
   }
 }

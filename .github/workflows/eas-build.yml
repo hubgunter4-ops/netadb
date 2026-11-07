@@ -47,5 +47,5 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build Android preview APK
-        run: eas build --platform android --profile preview --non-interactive --no-wait
+      - name: Build Android production APK
+        run: eas build --platform android --profile production-apk --non-interactive --no-wait

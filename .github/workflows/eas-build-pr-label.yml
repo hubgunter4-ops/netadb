@@ -8,7 +8,7 @@ on:
       profile:
         description: EAS Android build profile from eas.json
         required: true
-        default: preview
+        default: production-apk
         type: string
 
 permissions:
@@ -47,7 +47,7 @@ jobs:
               print(f"Unsupported Android build label: {label!r}. Expected eas-build-android[:<profile>].", file=sys.stderr)
               sys.exit(1)
 
-          profile = match.group(1) or "production"
+          profile = match.group(1) or "production-apk"
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"profile={profile}\n")
           PY
