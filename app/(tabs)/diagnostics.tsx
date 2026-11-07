@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, KeyboardAvoidingView, PermissionsAndroid, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, Text, TextInput, View } from "react-native";
+import { Alert, KeyboardAvoidingView, PermissionsAndroid, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { Link } from "expo-router";
 import { ScreenContainer } from "@/components/screen-container";
+import { useAdbSession } from "@/lib/adb-session-context";
 import { NetadbBridge } from "@/modules/netadb-bridge";
 import type { BridgeStatus } from "@/modules/netadb-bridge";
 import { classifyLogcatLine, parseExternalInboundConntrack, SNAPSHOT_COMMANDS, utcTimestamp, type ClassifiedEvent } from "@/lib/diagnostics/parser";
@@ -25,13 +26,10 @@ function Metric({ value, label }: { value: string; label: string }) { return <Vi
 
 export default function HomeScreen() {
   const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus | null>(null);
-  const [serial, setSerial] = useState("");
-  const [availableDevices, setAvailableDevices] = useState<string[]>([]);
-  const [pairPort, setPairPort] = useState("");
-  const [pairCode, setPairCode] = useState("");
-  const [connectPort, setConnectPort] = useState("");
+  const { connectedSerial } = useAdbSession();
+  const serial = connectedSerial ?? "";
   const [busy, setBusy] = useState(false);
-  const [connectionMessage, setConnectionMessage] = useState("ADB local aún no conectado");
+  const [connectionMessage, setConnectionMessage] = useState("");
   const [intervalText, setIntervalText] = useState("30");
   const [durationText, setDurationText] = useState("1800");
   const [includeTelephony, setIncludeTelephony] = useState(false);
@@ -96,37 +94,13 @@ export default function HomeScreen() {
     }
   };
 
-  const pair = async () => {
-    if (!NetadbBridge) return;
-    if (!pairPort.trim().includes(":") || !/^\d{6}$/.test(pairCode)) { setConnectionMessage("Introduce host:puerto para pairing y el código temporal de 6 dígitos mostrado por Android."); return; }
-    const temporaryCode = pairCode;
-    setPairCode("");
-    setBusy(true); setConnectionMessage("Esperando autorización de emparejamiento…");
-    try {
-      const result = await NetadbBridge.pair(pairPort.trim(), temporaryCode);
-      setConnectionMessage(result.success ? `Emparejamiento completado. ${result.output}` : `Emparejamiento pendiente o fallido. ${result.output}`);
-    } catch (error) { setConnectionMessage(`Error de pairing: ${String(error)}`); } finally { setBusy(false); }
-  };
-  const connect = async () => {
-    if (!NetadbBridge) return;
-    if (!connectPort.trim().includes(":")) { setConnectionMessage("Introduce la IP o host y el puerto mostrados en Wireless debugging."); return; }
-    setBusy(true); setConnectionMessage("Conectando al endpoint ADB inalámbrico…");
-    try {
-      const result = await NetadbBridge.connect(connectPort.trim());
-      const devices = result.connected ? result.devices ?? [] : [];
-      setAvailableDevices(devices);
-      const selected = result.connected && devices.length === 1 ? result.targetSerial ?? devices[0] : "";
-      setSerial(selected);
-      setConnectionMessage(result.connected ? (selected ? `Endpoint objetivo autorizado: ${selected}\n${result.output}` : `El endpoint solicitado está autorizado. Hay ${devices.length} dispositivos disponibles; elige explícitamente el serial.\n${result.output}`) : `El endpoint solicitado no quedó autorizado; no se habilitó ningún dispositivo previo.\n${result.output}`);
-    } catch (error) { setConnectionMessage(`No se pudo conectar: ${String(error)}`); } finally { setBusy(false); }
-  };
   const takeSnapshot = async () => {
     if (!NetadbBridge || !serial || runningCapture.current) return;
     runningCapture.current = true;
     const capturedAt = utcTimestamp();
     const files: Record<string, string> = {};
     const errors: string[] = [];
-    const commands: Array<readonly [string, string]> = [...SNAPSHOT_COMMANDS];
+    const commands: (readonly [string, string])[] = [...SNAPSHOT_COMMANDS];
     if (includeTelephony) commands.push(["telephony_registry", "dumpsys telephony.registry"]);
     try {
       for (const [name, command] of commands) {
@@ -275,7 +249,6 @@ export default function HomeScreen() {
       { text: "Borrar", style: "destructive", onPress: () => void clearLocalData() },
     ]);
   };
-  const androidReady = Platform.OS === "android" && Boolean(NetadbBridge) && bridgeStatus?.available === true && bridgeStatus.apiLevel >= 30;
   const comparisonBase = snapshots.find((item) => item.capturedAt === comparisonBaseId);
   const comparisonCurrent = snapshots.find((item) => item.capturedAt === comparisonCurrentId);
   const comparison = useMemo(() => comparisonBase && comparisonCurrent ? compareSnapshots(comparisonBase, comparisonCurrent) : null, [comparisonBase, comparisonCurrent]);
@@ -295,23 +268,18 @@ export default function HomeScreen() {
             <Text style={styles.heroBody}>Empareja el dispositivo Android objetivo por Wireless debugging. Los registros permanecen en este teléfono hasta que eliges compartirlos.</Text>
           </View>
           <View style={styles.statusCard}>
-            <View style={styles.cardTopline}><Text style={styles.cardLabel}>ESTADO DEL PUENTE ADB</Text><View style={[styles.statusDot, { backgroundColor: androidReady ? C.green : C.amber }]} /></View>
-            <Text style={styles.statusHeadline}>{androidReady ? (serial ? "Dispositivo seleccionado" : availableDevices.length > 1 ? "Conexión lista · falta elegir serial" : "Motor instalado · sin sesión") : Platform.OS === "web" ? "Vista previa web" : bridgeStatus && bridgeStatus.apiLevel < 30 ? "Wireless debugging requiere Android 11+" : bridgeStatus?.available === false ? "Motor ADB no disponible" : "Comprobando motor ADB…"}</Text>
-            <Text style={styles.statusBody}>{androidReady ? (serial ? `Dispositivo ${serial}` : availableDevices.length > 1 ? `Hay ${availableDevices.length} dispositivos autorizados. Selecciona un serial antes de iniciar capturas o logcat.` : `Android ${bridgeStatus.androidVersion} · API ${bridgeStatus.apiLevel}`) : Platform.OS === "web" ? "La ejecución ADB requiere el APK Android; aquí puedes revisar la interfaz." : bridgeStatus && bridgeStatus.apiLevel < 30 ? "El emparejamiento inalámbrico del sistema requiere Android 11 o posterior." : "Instala la versión Android compilada con el módulo nativo NetADB."}</Text>
+            <View style={styles.cardTopline}><Text style={styles.cardLabel}>SHELL ADB COMPARTIDO</Text><View style={[styles.statusDot, { backgroundColor: serial && bridgeStatus?.available ? C.green : C.amber }]} /></View>
+            <Text style={styles.statusHeadline}>{!NetadbBridge ? "Requiere APK Android" : bridgeStatus?.available === false ? "Motor ADB no disponible" : serial ? "Herramientas vinculadas" : "Sin shell activo"}</Text>
+            <Text style={styles.statusBody}>{serial ? `Dispositivo ${serial}. Snapshots, logcat y bugreport usarán este mismo serial.` : "Conecta y abre un shell desde ADB / NetADB. Herramientas se enlazará automáticamente a ese dispositivo."}</Text>
           </View>
           <View style={styles.section}>
-            <SectionTitle index="01" title="Emparejar y conectar" note="Ajustes → Opciones de desarrollador → Depuración inalámbrica" />
+            <SectionTitle index="01" title="Dispositivo activo" note="Compartido con la pestaña ADB / NetADB" />
             <View style={styles.panel}>
-              <Text style={styles.panelHeading}>Emparejamiento temporal</Text>
-              <Text style={styles.panelCopy}>Mantén abierta la pantalla de pairing de Android mientras introduces sus datos.</Text>
-              <View style={styles.twoColumns}><View style={{ flex: 1 }}><Field label="IP:PUERTO DE PAIRING" value={pairPort} onChangeText={setPairPort} placeholder="localhost:37401" /></View><View style={{ flex: 0.8 }}><Field label="CÓDIGO TEMPORAL" value={pairCode} onChangeText={(value) => setPairCode(value.replace(/\D/g, "").slice(0, 6))} placeholder="••••••" secure keyboardType="numeric" /></View></View>
-              <Action title={busy ? "PROCESANDO…" : "EMPAREJAR TELÉFONO"} onPress={() => void pair()} disabled={!androidReady || busy || capturing || logcatActive} />
-              <Field label="IP:PUERTO WIRELESS DEBUGGING" value={connectPort} onChangeText={setConnectPort} placeholder="192.168.1.20:5555 o localhost:5555" />
-              <Action title="CONECTAR DISPOSITIVO" onPress={() => void connect()} disabled={!androidReady || busy || capturing || logcatActive} secondary />
-              <View style={styles.notice}><Text style={styles.noticeMark}>i</Text><Text style={styles.noticeText}>El código se usa solo durante pairing y no se guarda. Android puede pedir aceptar la autorización en pantalla.</Text></View>
-              {busy ? <ActivityIndicator color={C.green} style={{ marginTop: 6 }} /> : null}
+              {serial ? <Text selectable style={styles.consoleText}>Serial activo: {serial}</Text> : <>
+                <Text style={styles.panelCopy}>No hay dispositivo seleccionado desde el shell. Conecta en la pestaña ADB / NetADB; no hace falta emparejarlo dos veces.</Text>
+                <Link href="/(tabs)/index" asChild><Pressable style={styles.legalLink}><Text style={styles.legalLinkText}>IR A ADB / NETADB →</Text></Pressable></Link>
+              </>}
               {connectionMessage ? <Text selectable style={styles.consoleText}>{connectionMessage}</Text> : null}
-              {availableDevices.length > 1 ? <View style={styles.devicePicker}>{availableDevices.map((device) => <Pressable key={device} disabled={capturing || logcatActive} onPress={() => setSerial(device)} style={[styles.deviceOption, serial === device && styles.deviceOptionSelected, (capturing || logcatActive) && { opacity: 0.45 }]}><Text style={[styles.deviceOptionText, serial === device && { color: C.green }]}>{device}</Text></Pressable>)}</View> : null}
             </View>
           </View>
           <View style={styles.section}>

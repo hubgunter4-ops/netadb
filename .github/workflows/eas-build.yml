@@ -6,6 +6,9 @@ on:
       - main
     paths:
       - "modules/**"
+      - "app/**"
+      - "lib/**"
+      - "components/**"
       - "app.config.ts"
       - "eas.json"
       - "package.json"

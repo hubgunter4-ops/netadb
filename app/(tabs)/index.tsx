@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { useAdbSession } from "@/lib/adb-session-context";
 import { NetadbBridge, type BridgeStatus } from "@/modules/netadb-bridge";
 
 const C = {
@@ -30,13 +31,35 @@ const MAX_SCROLLBACK_CHARS = 16_384;
 const QUICK_COMMANDS = [
   { group: "DISPOSITIVO", title: "Versión de Android", command: "getprop ro.build.version.release", note: "Versión comercial del sistema." },
   { group: "DISPOSITIVO", title: "Nivel de API", command: "getprop ro.build.version.sdk", note: "Nivel de API Android del dispositivo." },
+  { group: "DISPOSITIVO", title: "Modelo del dispositivo", command: "getprop ro.product.model", note: "Modelo reportado por Android." },
+  { group: "DISPOSITIVO", title: "Fabricante", command: "getprop ro.product.manufacturer", note: "Fabricante reportado por Android." },
+  { group: "DISPOSITIVO", title: "Huella de compilación", command: "getprop ro.build.fingerprint", note: "Identifica la compilación instalada." },
+  { group: "DISPOSITIVO", title: "Tiempo activo", command: "uptime", note: "Tiempo desde el último arranque y carga del sistema." },
+  { group: "DISPOSITIVO", title: "Resolución de pantalla", command: "wm size", note: "Resolución física y configurada." },
+  { group: "DISPOSITIVO", title: "Densidad de pantalla", command: "wm density", note: "Densidad física y configurada." },
   { group: "DISPOSITIVO", title: "Usuario del shell", command: "id", note: "Confirma con qué usuario ejecuta ADB Shell." },
+  { group: "BATERÍA Y ENERGÍA", title: "Estado de batería", command: "dumpsys battery", note: "Nivel, carga, temperatura y estado de la batería." },
+  { group: "BATERÍA Y ENERGÍA", title: "Estado de energía", command: "dumpsys power", note: "Estado de suspensión, pantalla y administración de energía." },
+  { group: "BATERÍA Y ENERGÍA", title: "Estado térmico", command: "dumpsys thermalservice", note: "Temperaturas y estado térmico expuestos por Android." },
+  { group: "ALMACENAMIENTO Y MEMORIA", title: "Espacio de archivos", command: "df -h", note: "Espacio total y disponible por sistema de archivos." },
+  { group: "ALMACENAMIENTO Y MEMORIA", title: "Memoria del sistema", command: "cat /proc/meminfo", note: "Estadísticas generales de memoria del kernel." },
+  { group: "ALMACENAMIENTO Y MEMORIA", title: "Memoria de Android", command: "dumpsys meminfo", note: "Resumen de memoria de procesos y sistema." },
+  { group: "PROCESOS", title: "Procesos activos", command: "ps -A", note: "Lista procesos visibles para el usuario shell." },
+  { group: "PROCESOS", title: "Carga de procesos", command: "top -b -n 1", note: "Muestra una lectura puntual de CPU y procesos." },
   { group: "RED", title: "Interfaces y direcciones", command: "ip addr", note: "Muestra las interfaces de red visibles para el shell." },
   { group: "RED", title: "Rutas IP", command: "ip route", note: "Consulta la tabla de rutas IPv4." },
+  { group: "RED", title: "Vecinos de red", command: "ip neigh", note: "Entradas vecinas ARP/NDP visibles en el dispositivo." },
+  { group: "RED", title: "Sockets TCP/UDP", command: "ss -tunap", note: "Sockets visibles; Android puede ocultar procesos de otras apps." },
   { group: "RED", title: "Conectividad Android", command: "dumpsys connectivity", note: "Estado de redes y conectividad del sistema." },
   { group: "RED", title: "Estado Wi-Fi", command: "dumpsys wifi", note: "Detalles de Wi-Fi; puede incluir identificadores de red." },
+  { group: "RED", title: "Estadísticas de red", command: "dumpsys netstats", note: "Resumen de contadores de tráfico del sistema." },
   { group: "APLICACIONES", title: "Paquetes de usuario", command: "pm list packages -3", note: "Lista apps de terceros instaladas en el teléfono." },
+  { group: "APLICACIONES", title: "Paquetes de sistema", command: "pm list packages -s", note: "Lista paquetes marcados como aplicaciones de sistema." },
+  { group: "APLICACIONES", title: "Permisos concedidos", command: "pm list permissions -g -d", note: "Lista permisos peligrosos agrupados; no cambia su estado." },
+  { group: "SISTEMA", title: "Propiedades principales", command: "getprop", note: "Lista propiedades del sistema; la salida puede contener identificadores." },
+  { group: "SISTEMA", title: "Modo de reposo", command: "dumpsys deviceidle", note: "Estado de Doze y restricciones de reposo." },
   { group: "REGISTROS", title: "Últimas 100 líneas de logcat", command: "logcat -d -t 100", note: "Puede mostrar datos personales o identificadores presentes en los logs." },
+  { group: "REGISTROS", title: "Últimas 100 líneas de errores", command: "logcat -d -t 100 -s AndroidRuntime:E System.err:E", note: "Filtra errores recientes; los registros pueden contener datos personales." },
 ];
 
 type SessionState = "offline" | "connecting" | "choose-device" | "ready" | "error";
@@ -90,6 +113,7 @@ export default function TerminalScreen() {
     "Empareja y conecta un dispositivo para iniciar una sesión.",
   ]);
   const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus | null>(null);
+  const { setConnectedSerial } = useAdbSession();
   const terminalScroll = useRef<ScrollView>(null);
   const commandInput = useRef<TextInput>(null);
   const activeShellSerial = useRef("");
@@ -125,9 +149,11 @@ export default function TerminalScreen() {
     const stateSubscription = NetadbBridge.addListener("onShellState", (event) => {
       if (event.serial !== activeShellSerial.current) return;
       if (event.state === "ready") {
+        setConnectedSerial(event.serial);
         setSessionState("ready");
         setNotice(`Shell activo · ${event.serial}`);
       } else {
+        setConnectedSerial(null);
         activeShellSerial.current = "";
         setSessionState(event.state === "error" ? "error" : "offline");
         setNotice(
@@ -144,7 +170,7 @@ export default function TerminalScreen() {
       lineSubscription.remove();
       stateSubscription.remove();
     };
-  }, [appendLine]);
+  }, [appendLine, setConnectedSerial]);
 
   useEffect(() => {
     terminalScroll.current?.scrollToEnd({ animated: true });
@@ -195,6 +221,7 @@ export default function TerminalScreen() {
 
   const openShell = async (deviceSerial: string) => {
     if (!NetadbBridge || !deviceSerial) return;
+    setConnectedSerial(null);
     activeShellSerial.current = deviceSerial;
     setSerial(deviceSerial);
     setSessionState("connecting");
@@ -205,14 +232,17 @@ export default function TerminalScreen() {
       const result = await NetadbBridge.openShell(deviceSerial);
       if (result.output) appendLine(result.output);
       if (result.ready) {
+        setConnectedSerial(result.serial || deviceSerial);
         setSessionState("ready");
         setNotice(`Shell listo · ${result.serial || deviceSerial}`);
       } else {
+        setConnectedSerial(null);
         activeShellSerial.current = "";
         setSessionState("error");
         setNotice(connectionHint(result.output, "No se pudo iniciar el shell ADB en el dispositivo seleccionado."));
       }
     } catch (error) {
+      setConnectedSerial(null);
       activeShellSerial.current = "";
       setSessionState("error");
       setNotice(connectionHint(error, "No se pudo abrir el shell."));
@@ -310,6 +340,7 @@ export default function TerminalScreen() {
 
     const endpoint = connectAddress.trim();
     const previousShell = activeShellSerial.current;
+    setConnectedSerial(null);
     activeShellSerial.current = "";
     setSerial("");
     setAvailableDevices([]);
@@ -389,6 +420,7 @@ export default function TerminalScreen() {
     try {
       const sent = await NetadbBridge.sendShellCommand(text);
       if (!sent) {
+        setConnectedSerial(null);
         setNotice("El comando no se pudo enviar; el shell quizá se cerró.");
         activeShellSerial.current = "";
         setSessionState("offline");
@@ -400,6 +432,7 @@ export default function TerminalScreen() {
   };
 
   const closeShell = async () => {
+    setConnectedSerial(null);
     activeShellSerial.current = "";
     if (NetadbBridge && sessionState === "ready") {
       try {
