@@ -1,0 +1,23 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'space.manus.netadb'
+version = '1.0.0'
+
+android {
+  namespace 'expo.modules.netadb'
+  defaultConfig {
+    minSdkVersion 24
+  }
+  packagingOptions {
+    jniLibs {
+      useLegacyPackaging = true
+    }
+  }
+}
+
+dependencies {
+  implementation 'androidx.core:core:1.16.0'
+}

@@ -33,6 +33,9 @@ yarn-error.*
 *.pem
 
 # local env files
+.env
+.env.*
+!.env.example
 .env*.local
 
 # typescript
@@ -61,6 +64,8 @@ Thumbs.db
 # Build files
 *.tgz
 *.tar.gz
+*.apk
+*.aab
 .cache/
 
 # Webdev artifacts (checkpoint zips, migrations, etc.)

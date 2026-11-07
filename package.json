@@ -1,5 +1,5 @@
 {
-  "name": "app-template",
+  "name": "netadb",
   "version": "1.0.0",
   "private": true,
   "main": "expo-router/entry",
@@ -17,6 +17,11 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "qr": "node scripts/generate_qr.mjs"
+  },
+  "expo": {
+    "autolinking": {
+      "nativeModulesDir": "./modules"
+    }
   },
   "dependencies": {
     "@expo/metro-runtime": "~57.0.16",
