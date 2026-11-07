@@ -110,7 +110,6 @@ internal object NetadbNetworkInspector {
         override == TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_NSA_MMWAVE -> "5G NR NSA · mmWave reportado"
         Build.VERSION.SDK_INT >= 31 && override == TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_ADVANCED -> "5G NR avanzado / 5G+"
         type == TelephonyManager.NETWORK_TYPE_LTE -> "LTE / 4G"
-        type == TelephonyManager.NETWORK_TYPE_LTE_CA -> "LTE-CA / 4G+"
         type == TelephonyManager.NETWORK_TYPE_HSPAP -> "HSPA+ / 3G"
         type == TelephonyManager.NETWORK_TYPE_HSPA -> "HSPA / 3G"
         type == TelephonyManager.NETWORK_TYPE_HSUPA -> "HSUPA / 3G"
