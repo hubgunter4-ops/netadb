@@ -15,6 +15,7 @@ import {
 } from "react-native";
 import { ScreenContainer } from "@/components/screen-container";
 import { AnimatedEntry } from "@/components/animated-entry";
+import { useAdbSession } from "@/lib/adb-session-context";
 import {
   NetadbBridge,
   type VpnAppTarget,
@@ -106,6 +107,7 @@ function wait(milliseconds: number) {
 
 export default function VpnScreen() {
   const { height: windowHeight } = useWindowDimensions();
+  const { connectedSerial, setConnectedSerial } = useAdbSession();
   const [status, setStatus] = useState<VpnCaptureStatus | null>(null);
   const [targets, setTargets] = useState<VpnAppTarget[]>([]);
   const [selected, setSelected] = useState("");
@@ -332,7 +334,13 @@ export default function VpnScreen() {
         );
         return;
       }
+      setMessage(
+        connectedSerial
+          ? `Cerrando shell ADB de ${connectedSerial} antes de iniciar la VPN…`
+          : "Cerrando cualquier shell ADB activo antes de iniciar la VPN…",
+      );
       await NetadbBridge.startVpnCapture(selected);
+      setConnectedSerial(null);
       setMessage("Android está preparando el túnel. Esperando confirmación…");
       for (let attempt = 0; attempt < 30; attempt++) {
         await wait(500);
@@ -364,7 +372,14 @@ export default function VpnScreen() {
     } finally {
       setBusy(false);
     }
-  }, [selected, busy, applyStatus, refresh]);
+  }, [
+    selected,
+    busy,
+    connectedSerial,
+    setConnectedSerial,
+    applyStatus,
+    refresh,
+  ]);
 
   const stop = async () => {
     if (!NetadbBridge || busy) return;

@@ -284,6 +284,7 @@ class NetadbBridgeModule : Module() {
         "Hay otra VPN activa. Detén esa VPN desde Android antes de iniciar NetADB."
       }
       check(android.net.VpnService.prepare(context) == null) { "Primero autoriza la VPN local en el diálogo de Android." }
+      closeShellInternal()
       NetadbVpnService.start(context, targetPackage)
       true
     }
