@@ -19,7 +19,7 @@ SRCDIR := $(LOCAL_PATH)/src
 include $(CLEAR_VARS)
 include $(LOCAL_PATH)/build.mk
 include $(LOCAL_PATH)/configs.mk
-LOCAL_MODULE    := libhev-task-system
+LOCAL_MODULE    := hev-task-system
 LOCAL_SRC_FILES := $(patsubst $(SRCDIR)/%,src/%,$(SRCFILES))
 LOCAL_C_INCLUDES := \
 	$(LOCAL_PATH)/src \
