@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, KeyboardAvoidingView, PermissionsAndroid, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { Link } from "expo-router";
+import { AnimatedEntry } from "@/components/animated-entry";
 import { ScreenContainer } from "@/components/screen-container";
 import { useAdbSession } from "@/lib/adb-session-context";
 import { NetadbBridge } from "@/modules/netadb-bridge";
@@ -256,6 +257,7 @@ export default function HomeScreen() {
   return (
     <ScreenContainer containerClassName="bg-[#111814]" safeAreaClassName="bg-[#111814]" style={styles.safe}>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        <AnimatedEntry style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
           <View style={styles.header}>
             <View style={styles.brandMark}><Text style={styles.brandGlyph}>N</Text></View>
@@ -263,9 +265,9 @@ export default function HomeScreen() {
             <View style={[styles.livePill, (capturing || logcatActive) && styles.livePillActive]}><View style={[styles.dot, (capturing || logcatActive) && { backgroundColor: C.green }]} /><Text style={styles.liveText}>{capturing || logcatActive ? "ACTIVO · FGS" : "EN ESPERA"}</Text></View>
           </View>
           <View style={styles.hero}>
-            <Text style={styles.heroKicker}>DIAGNÓSTICO DE CONECTIVIDAD</Text>
-            <Text style={styles.heroTitle}>Señales locales.{"\n"}<Text style={{ color: C.green }}>Evidencia exportable.</Text></Text>
-            <Text style={styles.heroBody}>Empareja el dispositivo Android objetivo por Wireless debugging. Los registros permanecen en este teléfono hasta que eliges compartirlos.</Text>
+            <Text style={styles.heroKicker}>DIAGNÓSTICO · SISTEMA · ADB</Text>
+            <Text style={styles.heroTitle}>Herramientas{"\n"}<Text style={{ color: C.green }}>del sistema.</Text></Text>
+            <Text style={styles.heroBody}>Diagnóstico y utilidades locales. Comparte solo los registros que revises y selecciones.</Text>
           </View>
           <View style={styles.statusCard}>
             <View style={styles.cardTopline}><Text style={styles.cardLabel}>SHELL ADB COMPARTIDO</Text><View style={[styles.statusDot, { backgroundColor: serial && bridgeStatus?.available ? C.green : C.amber }]} /></View>
@@ -351,6 +353,7 @@ export default function HomeScreen() {
           </View>
           <Text style={styles.footer}>NETADB · DIAGNÓSTICO LOCAL · {utcTimestamp().slice(0, 10)}</Text>
         </ScrollView>
+        </AnimatedEntry>
       </KeyboardAvoidingView>
     </ScreenContainer>
   );

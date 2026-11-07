@@ -472,8 +472,8 @@ class NetadbBridgeModule : Module() {
     }
 
     AsyncFunction("sendShellCommand") { command: String ->
-      require(command.isNotBlank() && command.length <= 10000 && !command.contains('\n') && !command.contains('\r')) {
-        "Comando vacío, multilínea o demasiado largo"
+      require(command.isNotBlank() && command.length <= 10000 && !command.contains('\u0000')) {
+        "Comando vacío, demasiado largo o contiene un byte no permitido"
       }
       synchronized(shellLock) {
         val process = shellProcess ?: return@synchronized false

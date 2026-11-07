@@ -13,6 +13,6 @@ export default function TabLayout() {
     <Tabs.Screen name="vpn" options={{ title: "VPN", tabBarIcon: ({ color }) => <IconSymbol size={24} name="paperplane.fill" color={color} /> }} />
     <Tabs.Screen name="shizuku" options={{ title: "Shizuku", tabBarIcon: ({ color }) => <IconSymbol size={24} name="square.grid.2x2.fill" color={color} /> }} />
     <Tabs.Screen name="apps" options={{ href: null }} />
-    <Tabs.Screen name="licenses" options={{ title: "Licencias", tabBarIcon: ({ color }) => <IconSymbol size={24} name="doc.text" color={color} /> }} />
+    <Tabs.Screen name="licenses" options={{ href: null }} />
   </Tabs></AdbSessionProvider>;
 }

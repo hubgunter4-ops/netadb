@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { AnimatedEntry } from "@/components/animated-entry";
 import { useAdbSession } from "@/lib/adb-session-context";
 import { NetadbBridge, type BridgeStatus } from "@/modules/netadb-bridge";
 
@@ -486,6 +487,7 @@ export default function TerminalScreen() {
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <StatusBar barStyle="light-content" backgroundColor={C.background} />
       <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        <AnimatedEntry style={styles.screen}>
         <View style={styles.header}>
           <View style={styles.brand}>
             <View style={styles.brandIcon}>
@@ -493,7 +495,7 @@ export default function TerminalScreen() {
             </View>
             <View>
               <Text style={styles.kicker}>NETADB / WIRELESS ADB</Text>
-              <Text style={styles.title}>Terminal</Text>
+              <Text style={styles.title}>ADB / NetADB</Text>
             </View>
           </View>
           <Pressable
@@ -586,9 +588,12 @@ export default function TerminalScreen() {
             value={command}
             onChangeText={setCommand}
             editable={sessionState === "ready"}
-            placeholder={sessionState === "ready" ? "Escribe un comando…" : "Waiting for connection…"}
+            placeholder={sessionState === "ready" ? "Escribe uno o varios comandos…" : "Conecta un dispositivo para abrir el shell…"}
             placeholderTextColor="#69796e"
             style={styles.commandInput}
+            multiline
+            maxLength={10000}
+            textAlignVertical="top"
             autoCapitalize="none"
             autoCorrect={false}
             returnKeyType="send"
@@ -607,6 +612,7 @@ export default function TerminalScreen() {
             <Text style={styles.sendButtonText}>ENVIAR</Text>
           </Pressable>
         </View>
+        </AnimatedEntry>
 
         <Modal visible={modalVisible} animationType="slide" transparent statusBarTranslucent onRequestClose={closeDialog}>
           <KeyboardAvoidingView style={styles.scrim} behavior={Platform.OS === "ios" ? "padding" : undefined}>
@@ -848,9 +854,9 @@ const styles = StyleSheet.create({
   },
   spinner: { alignSelf: "flex-start", marginTop: 10 },
   commandBar: {
-    minHeight: 57,
+    minHeight: 100,
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-end",
     gap: 7,
     paddingHorizontal: 9,
     paddingVertical: 7,
@@ -864,7 +870,8 @@ const styles = StyleSheet.create({
   clearButtonText: { color: C.muted, fontSize: 18 },
   commandInput: {
     flex: 1,
-    minHeight: 41,
+    minHeight: 78,
+    maxHeight: 112,
     color: C.text,
     backgroundColor: C.background,
     borderWidth: 1,
