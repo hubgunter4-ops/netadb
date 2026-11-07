@@ -35,7 +35,7 @@ HEV_SOCKS5_TUNNEL_INCLUDES := \
     $(LOCAL_PATH)/src \
     $(LOCAL_PATH)/src/misc \
     $(LOCAL_PATH)/src/core/include \
-    $(LOCAL_PATH)/third-part/yaml/include \
+    $(LOCAL_PATH)/third-part/include \
     $(LOCAL_PATH)/third-part/lwip/src/include \
     $(LOCAL_PATH)/third-part/lwip/src/ports/include \
     $(LOCAL_PATH)/third-part/hev-task-system/include
