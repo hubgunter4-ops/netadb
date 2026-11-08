@@ -110,10 +110,13 @@ export default function VpnScreen() {
   const { connectedSerial, setConnectedSerial } = useAdbSession();
   const [status, setStatus] = useState<VpnCaptureStatus | null>(null);
   const [targets, setTargets] = useState<VpnAppTarget[]>([]);
+  const [visibleTargetCount, setVisibleTargetCount] = useState(40);
   const [selected, setSelected] = useState("");
   const [showAppPicker, setShowAppPicker] = useState(false);
   const [query, setQuery] = useState("");
   const [trafficQuery, setTrafficQuery] = useState("");
+  const [visibleDomainCount, setVisibleDomainCount] = useState(20);
+  const [visibleConnectionCount, setVisibleConnectionCount] = useState(20);
   const [busy, setBusy] = useState(false);
   const [loadingTargets, setLoadingTargets] = useState(false);
   const [message, setMessage] = useState("");
@@ -184,6 +187,7 @@ export default function VpnScreen() {
     try {
       const next = await NetadbBridge.listVpnTargets();
       setTargets(next);
+      setVisibleTargetCount(40);
       setSelected((current) => {
         return current && next.some((item) => item.packageName === current)
           ? current
@@ -204,7 +208,6 @@ export default function VpnScreen() {
   useEffect(() => {
     const initial = setTimeout(() => {
       void refresh();
-      void loadTargets();
     }, 0);
     const subscription = AppState.addEventListener("change", (state) => {
       if (state !== "active" && pendingConsentStart.current) {
@@ -223,7 +226,7 @@ export default function VpnScreen() {
       subscription.remove();
       if (consentTimeout.current) clearTimeout(consentTimeout.current);
     };
-  }, [loadTargets, refresh]);
+  }, [refresh]);
 
   useEffect(() => {
     if (status?.state !== "starting" && !status?.running) return;
@@ -697,7 +700,10 @@ export default function VpnScreen() {
               <>
                 <TextInput
                   value={query}
-                  onChangeText={setQuery}
+                  onChangeText={(value) => {
+                    setQuery(value);
+                    setVisibleTargetCount(40);
+                  }}
                   placeholder="Buscar aplicación o paquete…"
                   placeholderTextColor={C.muted}
                   style={styles.input}
@@ -711,7 +717,7 @@ export default function VpnScreen() {
                   keyboardShouldPersistTaps="handled"
                   showsVerticalScrollIndicator
                 >
-                  {filteredTargets.map((item) => (
+                  {filteredTargets.slice(0, visibleTargetCount).map((item) => (
                     <Pressable
                       key={item.packageName}
                       accessibilityRole="button"
@@ -748,6 +754,17 @@ export default function VpnScreen() {
                       </Text>
                     </Pressable>
                   ))}
+                  {filteredTargets.length > visibleTargetCount ? (
+                    <Button
+                      label={`MOSTRAR ${Math.min(40, filteredTargets.length - visibleTargetCount)} MÁS`}
+                      onPress={() =>
+                        setVisibleTargetCount((count) =>
+                          Math.min(count + 40, filteredTargets.length),
+                        )
+                      }
+                      secondary
+                    />
+                  ) : null}
                   {targets.length > 0 && filteredTargets.length === 0 ? (
                     <Text style={styles.empty}>
                       No hay aplicaciones que coincidan con el filtro.
@@ -764,7 +781,7 @@ export default function VpnScreen() {
             ) : null}
             <Text style={styles.cardBody}>
               {targets.length
-                ? `${filteredTargets.length} de ${targets.length} apps · lista desplazable`
+                ? `${Math.min(filteredTargets.length, visibleTargetCount)} de ${filteredTargets.length} apps filtradas · ${targets.length} instaladas`
                 : loadingTargets
                   ? "Consultando Package Manager…"
                   : "Inventario aún no disponible."}
@@ -871,7 +888,11 @@ export default function VpnScreen() {
               </Text>
               <TextInput
                 value={trafficQuery}
-                onChangeText={setTrafficQuery}
+                onChangeText={(value) => {
+                  setTrafficQuery(value);
+                  setVisibleDomainCount(20);
+                  setVisibleConnectionCount(20);
+                }}
                 placeholder="Filtrar dominio, IP, puerto o protocolo"
                 placeholderTextColor={C.muted}
                 style={styles.input}
@@ -879,7 +900,7 @@ export default function VpnScreen() {
               />
               <Text style={styles.cardBody}>DOMINIOS · {domains.length}</Text>
               {domains.length ? (
-                domains.map((domain) => (
+                domains.slice(0, visibleDomainCount).map((domain) => (
                   <Text key={domain} style={styles.domain}>
                     {domain}
                   </Text>
@@ -889,10 +910,21 @@ export default function VpnScreen() {
                   Aún no se observaron dominios en esta sesión.
                 </Text>
               )}
+              {domains.length > visibleDomainCount ? (
+                <Button
+                  label={`MOSTRAR ${Math.min(20, domains.length - visibleDomainCount)} MÁS`}
+                  onPress={() =>
+                    setVisibleDomainCount((count) =>
+                      Math.min(count + 20, domains.length),
+                    )
+                  }
+                  secondary
+                />
+              ) : null}
               <Text style={styles.cardBody}>
                 DESTINOS · {connections.length}
               </Text>
-              {connections.slice(0, 80).map((item) => (
+              {connections.slice(0, visibleConnectionCount).map((item) => (
                 <View
                   key={`${item.protocol}:${item.endpoint}`}
                   style={styles.event}
@@ -908,6 +940,17 @@ export default function VpnScreen() {
                   </Text>
                 </View>
               ))}
+              {connections.length > visibleConnectionCount ? (
+                <Button
+                  label={`MOSTRAR ${Math.min(20, connections.length - visibleConnectionCount)} MÁS`}
+                  onPress={() =>
+                    setVisibleConnectionCount((count) =>
+                      Math.min(count + 20, connections.length),
+                    )
+                  }
+                  secondary
+                />
+              ) : null}
               <View style={styles.row}>
                 <Button
                   label="EXPORTAR JSON"
