@@ -135,6 +135,7 @@ const config: ExpoConfig & { logoUrl: string } = {
     favicon: "./assets/images/favicon.png",
   },
   plugins: [
+    "./plugins/with-network-security-config",
     "expo-asset",
     "expo-router",
     [

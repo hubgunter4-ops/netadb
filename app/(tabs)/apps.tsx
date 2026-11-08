@@ -103,7 +103,7 @@ export default function AppsScreen() {
               if (target) {
                 try {
                   setVpnBusy(true);
-                  await NetadbBridge.startVpnCapture(target);
+                  await NetadbBridge.startVpnCapture("application", target, []);
                   setMessage({ tone: "warn", text: "VPN local iniciándose. Comprueba que el estado cambie a ACTIVA." });
                   await refreshVpnStatus();
                 } catch (error) {
@@ -258,7 +258,7 @@ export default function AppsScreen() {
         pendingVpnStart.current = false;
         setVpnBusy(true);
         try {
-          await NetadbBridge.startVpnCapture(target);
+          await NetadbBridge.startVpnCapture("application", target, []);
           setMessage({ tone: "warn", text: "VPN local iniciándose. Comprueba que el estado cambie a ACTIVA." });
         } finally {
           setVpnBusy(false);
@@ -281,7 +281,7 @@ export default function AppsScreen() {
       { text: "INICIAR", onPress: () => void (async () => {
         setVpnBusy(true);
         try {
-          await bridge.startVpnCapture(target.packageName);
+          await bridge.startVpnCapture("application", target.packageName, []);
           setMessage({ tone: "warn", text: "Solicitud enviada. Espera a que el servicio VPN y el relay local indiquen ACTIVA." });
           await refreshVpnStatus();
         } catch (error) { setMessage({ tone: "bad", text: `No se pudo iniciar la VPN local: ${String(error)}` }); }

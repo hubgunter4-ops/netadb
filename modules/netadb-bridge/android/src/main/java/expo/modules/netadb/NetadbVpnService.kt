@@ -28,8 +28,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
 /**
- * User-started, per-application VPN capture. The TUN traffic is relayed by Hev's
- * bundled SOCKS5 server and transparent tunnel; packet contents are not persisted.
+ * User-started VPN capture. The TUN traffic is relayed by Hev's bundled SOCKS5
+ * server and transparent tunnel; packet contents are not persisted.
  */
 class NetadbVpnService : VpnService() {
   private val mainHandler = Handler(Looper.getMainLooper())
@@ -68,22 +68,33 @@ class NetadbVpnService : VpnService() {
       }
       ACTION_START -> {
         val packageName = intent.getStringExtra(EXTRA_PACKAGE).orEmpty()
-        if (packageName.isBlank()) {
+        val scope = intent.getStringExtra(EXTRA_SCOPE).orEmpty().ifBlank { SCOPE_APPLICATION }
+        val blockedDomains = intent.getStringArrayListExtra(EXTRA_BLOCKED_DOMAINS)
+          ?.mapNotNull(::normalizeDomain)
+          ?.toSet()
+          .orEmpty()
+        if (scope !in setOf(SCOPE_APPLICATION, SCOPE_GLOBAL)) {
+          failAndStop("Alcance VPN no permitido.")
+          return START_NOT_STICKY
+        }
+        if (scope == SCOPE_APPLICATION && packageName.isBlank()) {
           failAndStop("No se indicó una aplicación objetivo.")
           return START_NOT_STICKY
         }
         if (currentState == STATE_STARTING || currentState == STATE_RUNNING) {
-          if (currentPackage != packageName) {
-            failAndStop("Detén la captura actual antes de elegir otra aplicación.")
+          if (currentScope != scope || currentPackage != packageName) {
+            failAndStop("Detén la captura actual antes de cambiar su alcance.")
           }
           return START_NOT_STICKY
         }
         stopRequested.set(false)
         currentPackage = packageName
-        setState(STATE_STARTING, "Preparando captura local para $packageName.")
+        currentScope = scope
+        currentBlockedDomains = blockedDomains
+        setState(STATE_STARTING, startMessage(scope, packageName, blockedDomains))
         NetadbVpnEventStore.clear()
         ensureForeground()
-        startThread = thread(name = "NetADB-vpn-start", isDaemon = true) { startCapture(packageName) }
+        startThread = thread(name = "NetADB-vpn-start", isDaemon = true) { startCapture(packageName, scope, blockedDomains) }
         return START_NOT_STICKY
       }
       else -> {
@@ -118,11 +129,11 @@ class NetadbVpnService : VpnService() {
     super.onDestroy()
   }
 
-  private fun startCapture(packageName: String) {
+  private fun startCapture(packageName: String, scope: String, blockedDomains: Set<String>) {
     try {
       check(VpnService.prepare(this) == null) { "Falta autorización VPN de Android. Autoriza y vuelve a iniciar." }
       check(!hasOtherVpn(this)) { "Hay otra VPN activa. Detén esa VPN explícitamente antes de iniciar NetADB." }
-      validateTargetPackage(packageName)
+      if (scope == SCOPE_APPLICATION) validateTargetPackage(packageName)
       check(!stopRequested.get()) { "Inicio cancelado." }
 
       val tcpPort = findLoopbackPort()
@@ -142,14 +153,21 @@ class NetadbVpnService : VpnService() {
         check(!stopRequested.get()) { "Inicio cancelado." }
 
         val builder = Builder()
-          .setSession("NetADB · captura por aplicación")
+          .setSession(if (scope == SCOPE_GLOBAL) "NetADB · captura global" else "NetADB · captura por aplicación")
           .setMtu(TUN_MTU)
           .setBlocking(false)
           .addAddress(TUN_IPV4_ADDRESS, 32)
           .addRoute("0.0.0.0", 0)
           .addAddress(TUN_IPV6_ADDRESS, 128)
           .addRoute("::", 0)
-          .addAllowedApplication(packageName)
+
+        if (scope == SCOPE_GLOBAL) {
+          // Sin addAllowedApplication(), Android enruta todas las apps por defecto.
+          // Excluir NetADB evita que sus conexiones de control entren en su propio TUN.
+          builder.addDisallowedApplication(packageName.ifBlank { this.packageName })
+        } else {
+          builder.addAllowedApplication(packageName)
+        }
 
         currentDnsServers(this).forEach { dns -> runCatching { builder.addDnsServer(dns) } }
         check(!hasOtherVpn(this)) {
@@ -174,7 +192,7 @@ class NetadbVpnService : VpnService() {
       check(!stopRequested.get()) { "Inicio cancelado." }
       mainHandler.post {
         if (!stopRequested.get()) {
-          setState(STATE_RUNNING, "Captura activa solo para $packageName.")
+          setState(STATE_RUNNING, runningMessage(scope, packageName, blockedDomains))
           refreshNotification()
           mainHandler.removeCallbacks(engineCheck)
           mainHandler.postDelayed(engineCheck, ENGINE_CHECK_MS)
@@ -191,6 +209,24 @@ class NetadbVpnService : VpnService() {
     require(target != packageName) { "NetADB no puede capturarse a sí misma como aplicación objetivo." }
     @Suppress("DEPRECATION")
     packageManager.getApplicationInfo(target, 0)
+  }
+
+  private fun startMessage(scope: String, packageName: String, blockedDomains: Set<String>): String {
+    val subject = if (scope == SCOPE_GLOBAL) "todas las aplicaciones" else packageName
+    val policy = if (blockedDomains.isEmpty()) "DNS en modo observación" else "${blockedDomains.size} dominios en política DNS"
+    return "Preparando captura para $subject · $policy."
+  }
+
+  private fun runningMessage(scope: String, packageName: String, blockedDomains: Set<String>): String {
+    val subject = if (scope == SCOPE_GLOBAL) "todas las aplicaciones" else packageName
+    val policy = if (blockedDomains.isEmpty()) "DNS en modo observación" else "política DNS configurada (${blockedDomains.size} dominios)"
+    return "Captura activa para $subject · $policy."
+  }
+
+  private fun normalizeDomain(value: String): String? {
+    val domain = value.trim().trimEnd('.').lowercase()
+    if (domain.isBlank() || domain.length > 253) return null
+    return domain.takeIf { it.matches(Regex("(?i)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}")) }
   }
 
   private fun waitForLoopbackServer(port: Int): Boolean {
@@ -266,13 +302,14 @@ class NetadbVpnService : VpnService() {
     val contentIntent = launch?.let { PendingIntent.getActivity(this, 1, it, PendingIntent.FLAG_UPDATE_CURRENT or immutable) }
     val stopIntent = Intent(this, NetadbVpnService::class.java).setAction(ACTION_STOP)
     val stopPendingIntent = PendingIntent.getService(this, 2, stopIntent, PendingIntent.FLAG_UPDATE_CURRENT or immutable)
-    val detail = "${currentPackage.ifBlank { "App no seleccionada" }} · metadatos locales · sin descifrado TLS"
+    val subject = if (currentScope == SCOPE_GLOBAL) "Todas las apps" else currentPackage.ifBlank { "App no seleccionada" }
+    val detail = "$subject · metadatos locales · sin descifrado TLS"
     return NotificationCompat.Builder(this, CHANNEL_ID)
       .setSmallIcon(R.drawable.ic_stat_netadb)
       .setContentTitle(if (currentState == STATE_RUNNING) "NetADB · VPN local activa" else "NetADB · preparando captura VPN")
       .setContentText(detail)
       .setStyle(NotificationCompat.BigTextStyle().bigText(detail))
-      .setSubText("Solo el dispositivo · tráfico de una app")
+      .setSubText(if (currentScope == SCOPE_GLOBAL) "Solo el dispositivo · tráfico global" else "Solo el dispositivo · tráfico de una app")
       .setCategory(NotificationCompat.CATEGORY_SERVICE)
       .setPriority(NotificationCompat.PRIORITY_LOW)
       .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
@@ -302,7 +339,11 @@ class NetadbVpnService : VpnService() {
       NetadbVpnEventStore.clear()
       mainHandler.post {
         setState(if (failed) STATE_ERROR else STATE_IDLE, finalMessage)
-        if (!failed) currentPackage = ""
+        if (!failed) {
+          currentPackage = ""
+          currentScope = SCOPE_APPLICATION
+          currentBlockedDomains = emptySet()
+        }
         if (foregroundStarted) stopForeground(STOP_FOREGROUND_REMOVE)
         foregroundStarted = false
         releaseWakeLock()
@@ -359,6 +400,8 @@ class NetadbVpnService : VpnService() {
     private const val CHANNEL_ID = "netadb_vpn"
     private const val NOTIFICATION_ID = 7315
     private const val EXTRA_PACKAGE = "targetPackage"
+    private const val EXTRA_SCOPE = "scope"
+    private const val EXTRA_BLOCKED_DOMAINS = "blockedDomains"
     private const val ACTION_START = "expo.modules.netadb.vpn.START"
     private const val ACTION_STOP = "expo.modules.netadb.vpn.STOP"
     private const val TUN_MTU = 1500
@@ -369,17 +412,27 @@ class NetadbVpnService : VpnService() {
     private const val STATE_STARTING = "starting"
     private const val STATE_RUNNING = "running"
     private const val STATE_ERROR = "error"
+    private const val SCOPE_APPLICATION = "application"
+    private const val SCOPE_GLOBAL = "global"
 
     @Volatile private var runningService: NetadbVpnService? = null
     @Volatile private var ownVpnEstablished = false
     @Volatile private var currentState = STATE_IDLE
     @Volatile private var currentPackage = ""
+    @Volatile private var currentScope = SCOPE_APPLICATION
+    @Volatile private var currentBlockedDomains: Set<String> = emptySet()
     @Volatile private var currentMessage = "La captura VPN está detenida."
 
     fun start(context: Context, targetPackage: String) {
+      start(context, SCOPE_APPLICATION, targetPackage, emptyList())
+    }
+
+    fun start(context: Context, scope: String, targetPackage: String, blockedDomains: List<String>) {
       val intent = Intent(context, NetadbVpnService::class.java)
         .setAction(ACTION_START)
+        .putExtra(EXTRA_SCOPE, scope)
         .putExtra(EXTRA_PACKAGE, targetPackage)
+        .putStringArrayListExtra(EXTRA_BLOCKED_DOMAINS, ArrayList(blockedDomains))
       ContextCompat.startForegroundService(context, intent)
     }
 
@@ -412,7 +465,9 @@ class NetadbVpnService : VpnService() {
         "otherVpnActive" to hasOtherVpn(context),
         "running" to (currentState == STATE_RUNNING),
         "state" to currentState,
+        "scope" to currentScope,
         "packageName" to currentPackage,
+        "blockedDomains" to currentBlockedDomains.toList(),
         "message" to currentMessage,
         "txPackets" to stats.getOrElse(0) { 0L },
         "txBytes" to stats.getOrElse(1) { 0L },

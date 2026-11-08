@@ -20,6 +20,7 @@ import {
   NetadbBridge,
   type VpnAppTarget,
   type VpnCaptureStatus,
+  type VpnScope,
 } from "@/modules/netadb-bridge";
 
 const C = {
@@ -112,6 +113,9 @@ export default function VpnScreen() {
   const [targets, setTargets] = useState<VpnAppTarget[]>([]);
   const [visibleTargetCount, setVisibleTargetCount] = useState(40);
   const [selected, setSelected] = useState("");
+  const [scope, setScope] = useState<VpnScope>("application");
+  const [blockedDomainInput, setBlockedDomainInput] = useState("");
+  const [blockedDomains, setBlockedDomains] = useState<string[]>([]);
   const [showAppPicker, setShowAppPicker] = useState(false);
   const [query, setQuery] = useState("");
   const [trafficQuery, setTrafficQuery] = useState("");
@@ -158,6 +162,7 @@ export default function VpnScreen() {
         at: capturedAt,
       };
       if (next.packageName) setSelected(next.packageName);
+      if (next.scope) setScope(next.scope);
     } else {
       lastTraffic.current = null;
     }
@@ -325,9 +330,13 @@ export default function VpnScreen() {
   };
 
   const start = useCallback(async () => {
-    if (!NetadbBridge || !selected || busy) return;
+    if (!NetadbBridge || (scope === "application" && !selected) || busy) return;
     setBusy(true);
-    setMessage(`Solicitando VPN para ${selected}…`);
+    setMessage(
+      scope === "global"
+        ? "Solicitando VPN global…"
+        : `Solicitando VPN para ${selected}…`,
+    );
     try {
       const latest = await NetadbBridge.getVpnCaptureStatus();
       applyStatus(latest);
@@ -342,7 +351,11 @@ export default function VpnScreen() {
           ? `Cerrando shell ADB de ${connectedSerial} antes de iniciar la VPN…`
           : "Cerrando cualquier shell ADB activo antes de iniciar la VPN…",
       );
-      await NetadbBridge.startVpnCapture(selected);
+      await NetadbBridge.startVpnCapture(
+        scope,
+        scope === "global" ? "" : selected,
+        blockedDomains,
+      );
       setConnectedSerial(null);
       setMessage("Android está preparando el túnel. Esperando confirmación…");
       for (let attempt = 0; attempt < 30; attempt++) {
@@ -350,7 +363,11 @@ export default function VpnScreen() {
         const next = await NetadbBridge.getVpnCaptureStatus();
         applyStatus(next);
         if (next.state === "running" && next.running) {
-          setMessage(`VPN activa para ${selected}.`);
+          setMessage(
+            scope === "global"
+              ? "VPN global activa."
+              : `VPN activa para ${selected}.`,
+          );
           return;
         }
         if (next.state === "error") {
@@ -377,6 +394,8 @@ export default function VpnScreen() {
     }
   }, [
     selected,
+    scope,
+    blockedDomains,
     busy,
     connectedSerial,
     setConnectedSerial,
@@ -425,10 +444,10 @@ export default function VpnScreen() {
       });
       return;
     }
-    if (!selected) {
+    if (scope === "application" && !selected) {
       setShowAppPicker(true);
       setMessage(
-        "Selecciona una app objetivo. La VPN no depende del shell ADB.",
+        "Selecciona una app objetivo o cambia el alcance a todas las apps.",
       );
       return;
     }
@@ -567,9 +586,11 @@ export default function VpnScreen() {
     ? "Detén la otra VPN desde Android para liberar el servicio."
     : !status?.permissionGranted
       ? "Autoriza la VPN de Android antes de iniciar la captura."
-      : !selected
+      : scope === "application" && !selected
         ? "Selecciona una aplicación instalada en la lista."
-        : "El túnel se limitará únicamente a la aplicación seleccionada.";
+        : scope === "global"
+          ? "Todo el tráfico pasará por el TUN, excepto NetADB."
+          : "El túnel se limitará únicamente a la aplicación seleccionada.";
 
   return (
     <ScreenContainer style={styles.screen}>
@@ -582,8 +603,8 @@ export default function VpnScreen() {
           <Text style={styles.eyebrow}>NETADB / HERRAMIENTA VPN</Text>
           <Text style={styles.title}>VPN</Text>
           <Text style={styles.body}>
-            Túnel VPN local de Android para una app elegida, independiente del
-            shell ADB. No es un servidor VPN remoto ni descifra TLS.
+            Túnel VPN local de Android configurable por aplicación o para todo
+            el dispositivo. No es un servidor VPN remoto ni descifra TLS.
           </Text>
         </AnimatedEntry>
 
@@ -619,7 +640,7 @@ export default function VpnScreen() {
             </View>
             <Text style={styles.cardBody}>
               {status?.message ??
-                "Autoriza el servicio VPN de Android y selecciona una aplicación objetivo."}
+                "Autoriza el servicio VPN de Android y elige el alcance de captura."}
             </Text>
             {status?.otherVpnActive ? (
               <Text style={styles.errorNotice}>
@@ -645,6 +666,55 @@ export default function VpnScreen() {
                 secondary
               />
             </View>
+          </View>
+        </AnimatedEntry>
+
+        <AnimatedEntry delay={90}>
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>ALCANCE Y POLÍTICA DNS</Text>
+            <Text style={styles.cardBody}>
+              En modo global, NetADB queda excluida para evitar un bucle de
+              tráfico. La lista DNS queda preparada para el filtro nativo del
+              túnel.
+            </Text>
+            <View style={styles.row}>
+              <Button
+                label="SOLO APP"
+                secondary={scope !== "application"}
+                onPress={() => setScope("application")}
+                disabled={busy || Boolean(status?.running)}
+              />
+              <Button
+                label="TODAS LAS APPS"
+                secondary={scope !== "global"}
+                onPress={() => setScope("global")}
+                disabled={busy || Boolean(status?.running)}
+              />
+            </View>
+            <TextInput
+              value={blockedDomainInput}
+              onChangeText={setBlockedDomainInput}
+              onSubmitEditing={() => {
+                const domain = blockedDomainInput
+                  .trim()
+                  .toLowerCase()
+                  .replace(/\.$/, "");
+                if (domain && !blockedDomains.includes(domain))
+                  setBlockedDomains((items) => [...items, domain]);
+                setBlockedDomainInput("");
+              }}
+              placeholder="Dominio a bloquear y Enter…"
+              placeholderTextColor={C.muted}
+              style={styles.input}
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={!busy && !status?.running}
+            />
+            {blockedDomains.length ? (
+              <Text style={styles.cardBody}>
+                Bloqueos: {blockedDomains.join(", ")}
+              </Text>
+            ) : null}
           </View>
         </AnimatedEntry>
 

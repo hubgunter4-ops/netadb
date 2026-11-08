@@ -276,16 +276,20 @@ class NetadbBridgeModule : Module() {
       }
     }
 
-    AsyncFunction("startVpnCapture") { targetPackage: String ->
+    AsyncFunction("startVpnCapture") { scope: String, targetPackage: String, blockedDomains: List<String> ->
       val context = appContext.reactContext?.applicationContext
         ?: throw IllegalStateException("Contexto Android no disponible")
-      require(targetPackage.matches(Regex("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+"))) { "Nombre de paquete inválido" }
+      require(scope in setOf("application", "global")) { "Alcance VPN no permitido" }
+      if (scope == "application") {
+        require(targetPackage.matches(Regex("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+"))) { "Nombre de paquete inválido" }
+      }
+      require(blockedDomains.size <= 1_000) { "La política DNS excede el límite de dominios" }
       check(!NetadbVpnService.hasOtherVpn(context)) {
-        "Hay otra VPN activa. Detén esa VPN desde Android antes de iniciar NetADB."
+        "Hay otra VPN activa. Detén esa VPN explícitamente antes de iniciar NetADB."
       }
       check(android.net.VpnService.prepare(context) == null) { "Primero autoriza la VPN local en el diálogo de Android." }
       closeShellInternal()
-      NetadbVpnService.start(context, targetPackage)
+      NetadbVpnService.start(context, scope, targetPackage, blockedDomains)
       true
     }
 
@@ -352,8 +356,9 @@ class NetadbBridgeModule : Module() {
     AsyncFunction("pair") { address: String, pairingCode: String ->
       require(isValidAddress(address)) { "La dirección de emparejamiento debe ser host:puerto" }
       require(pairingCode.matches(Regex("[0-9]{6}"))) { "El código temporal debe tener 6 dígitos" }
+      val targetAddress = address.trim()
       val adb = adbPath()
-      val process = adbProcessBuilder(adb, listOf("pair", address.trim())).start()
+      val process = adbProcessBuilder(adb, listOf("pair", targetAddress)).start()
       val output = StringBuilder()
       val outputLock = Any()
       val outputThread = thread(name = "NetADB-pair-output", isDaemon = true) {
