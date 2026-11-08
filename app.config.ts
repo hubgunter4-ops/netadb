@@ -2,13 +2,16 @@
 import "./scripts/load-env.js";
 import type { ExpoConfig } from "expo/config";
 
-// Bundle ID format: space.manus.<project_name_dots>.<timestamp>
-// e.g., "my-app" created at 2024-01-15 10:30:45 -> "space.manus.my.app.t20240115103045"
-// Bundle ID can only contain letters, numbers, and dots
-// Android requires each dot-separated segment to start with a letter
+// iOS bundle ID format: space.manus.<project_name_dots>.<timestamp>
 const rawBundleId = "space.manus.netadb.t224504891442998";
-const bundleId =
-  rawBundleId
+// Keep Android's package ID independent so it can be changed without altering
+// the iOS bundle ID or deep-link scheme. Keep the value stable to preserve upgrades.
+const rawAndroidPackage = "space.manus.netadb.t224504891442998";
+
+// Identifiers can only contain letters, numbers, and dots. Android requires
+// every dot-separated segment to start with a letter.
+const normalizeIdentifier = (rawIdentifier: string) =>
+  rawIdentifier
     .replace(/[-_]/g, ".") // Replace hyphens/underscores with dots
     .replace(/[^a-zA-Z0-9.]/g, "") // Remove invalid chars
     .replace(/\.+/g, ".") // Collapse consecutive dots
@@ -21,6 +24,8 @@ const bundleId =
       return /^[a-zA-Z]/.test(segment) ? segment : "x" + segment;
     })
     .join(".") || "space.manus.app";
+const bundleId = normalizeIdentifier(rawBundleId);
+const androidPackage = normalizeIdentifier(rawAndroidPackage);
 // Extract timestamp from bundle ID and prefix with "manus" for deep link scheme
 // e.g., "space.manus.my.app.t20240115103045" -> "manus20240115103045"
 const timestamp = bundleId.split(".").pop()?.replace(/^t/, "") ?? "";
@@ -35,10 +40,11 @@ const env = {
   appSlug: "netadb",
   // S3 URL of the app logo - set this to the URL returned by generate_image when creating custom logo
   // Leave empty to use the default icon from assets/images/icon.png
-  logoUrl: "https://files.manuscdn.com/user_upload_by_module/session_file/310519664035504776/bHfjuLxejLUjzlCA.png",
+  logoUrl:
+    "https://files.manuscdn.com/user_upload_by_module/session_file/310519664035504776/bHfjuLxejLUjzlCA.png",
   scheme: schemeFromBundleId,
   iosBundleId: bundleId,
-  androidPackage: bundleId,
+  androidPackage,
 };
 
 // Expo serializes this browser-safe subset into native and web bundles. The server-only
@@ -63,7 +69,8 @@ const publicRuntime = {
 };
 
 const config: ExpoConfig & { logoUrl: string } = {
-  logoUrl: "https://files.manuscdn.com/user_upload_by_module/session_file/310519664035504776/bHfjuLxejLUjzlCA.png",
+  logoUrl:
+    "https://files.manuscdn.com/user_upload_by_module/session_file/310519664035504776/bHfjuLxejLUjzlCA.png",
   name: env.appName,
   slug: env.appSlug,
   version: appVersion,
@@ -84,9 +91,9 @@ const config: ExpoConfig & { logoUrl: string } = {
   ios: {
     supportsTablet: true,
     bundleIdentifier: env.iosBundleId,
-    "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
-      }
+    infoPlist: {
+      ITSAppUsesNonExemptEncryption: false,
+    },
   },
   android: {
     versionCode: androidVersionCode,
@@ -98,7 +105,16 @@ const config: ExpoConfig & { logoUrl: string } = {
     },
     predictiveBackGestureEnabled: false,
     package: env.androidPackage,
-    permissions: ["INTERNET", "ACCESS_NETWORK_STATE", "QUERY_ALL_PACKAGES", "PACKAGE_USAGE_STATS", "POST_NOTIFICATIONS", "READ_PHONE_STATE", "FOREGROUND_SERVICE", "FOREGROUND_SERVICE_SPECIAL_USE"],
+    permissions: [
+      "INTERNET",
+      "ACCESS_NETWORK_STATE",
+      "QUERY_ALL_PACKAGES",
+      "PACKAGE_USAGE_STATS",
+      "POST_NOTIFICATIONS",
+      "READ_PHONE_STATE",
+      "FOREGROUND_SERVICE",
+      "FOREGROUND_SERVICE_SPECIAL_USE",
+    ],
     intentFilters: [
       {
         action: "VIEW",
@@ -124,7 +140,8 @@ const config: ExpoConfig & { logoUrl: string } = {
     [
       "expo-audio",
       {
-        microphonePermission: "Allow $(PRODUCT_NAME) to access your microphone.",
+        microphonePermission:
+          "Allow $(PRODUCT_NAME) to access your microphone.",
       },
     ],
     [
@@ -134,17 +151,17 @@ const config: ExpoConfig & { logoUrl: string } = {
         supportsPictureInPicture: true,
       },
     ],
-      [
-        "expo-splash-screen",
-        {
-          image: "./assets/images/splash-icon.png",
-          imageWidth: 200,
-          resizeMode: "contain",
+    [
+      "expo-splash-screen",
+      {
+        image: "./assets/images/splash-icon.png",
+        imageWidth: 200,
+        resizeMode: "contain",
+        backgroundColor: "#111814",
+        dark: {
           backgroundColor: "#111814",
-          dark: {
-            backgroundColor: "#111814",
-          },
         },
+      },
     ],
     [
       "expo-build-properties",
